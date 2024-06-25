@@ -107,6 +107,9 @@ spec:
               subPath: kubeconfig
               readOnly: true
             {{ end }}
+            - name: waldur-ssh-signing-key
+              mountPath: /etc/waldur/ssh-signing-key
+              readOnly: true
       volumes:
       - name: api-override
         configMap:
@@ -155,6 +158,9 @@ spec:
         secret:
           secretName: waldur-script-kubeconfig
       {{ end }}
+      - name: waldur-ssh-signing-key
+        secret:
+          secretName: waldur-ssh-signing-key
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

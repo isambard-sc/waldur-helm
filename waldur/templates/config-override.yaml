@@ -451,3 +451,5 @@ data:
     WALDUR_KEYCLOAK['USERNAME'] = {{ .Values.waldur.keycloak_sync.username | quote }}
     WALDUR_KEYCLOAK['PASSWORD'] = {{ .Values.waldur.keycloak_sync.password | quote }}
     {{ end }}
+
+    SSH_PRIVATE_SIGNING_KEY_PATH = "/etc/waldur/ssh-signing-key/private"
