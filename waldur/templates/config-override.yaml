@@ -463,7 +463,7 @@ data:
 
         INSTALLED_APPS += ('corsheaders',)
         MIDDLEWARE = ('corsheaders.middleware.CorsMiddleware',) + MIDDLEWARE
-        CORS_ORIGIN_ALLOW_ALL = True
+        # CORS_ORIGIN_ALLOW_ALL = True
         CORS_EXPOSE_HEADERS = (
             'x-result-count',
             'Link',
