@@ -465,7 +465,7 @@ data:
         MIDDLEWARE = ('corsheaders.middleware.CorsMiddleware',) + MIDDLEWARE
 
         CORS_ALLOWED_ORIGINS = [
-             '{{ .Values.homeportHostname }}'
+          'https://{{ .Values.homeportHostname }}'
         ]
 
         CORS_EXPOSE_HEADERS = (
