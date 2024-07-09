@@ -26,7 +26,7 @@ spec:
       {{ end }}
       containers:
         - name: waldur-homeport
-          image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.homeport.imageName }}:{{ .Values.waldur.imageTag }}
+          image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.homeport.imageName }}:{{ .Values.waldur.homeport.imageTag }}
           imagePullPolicy: {{ .Values.waldur.pullPolicy }}
           livenessProbe:
             httpGet:
