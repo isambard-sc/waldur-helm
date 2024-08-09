@@ -14,7 +14,9 @@ fullnameOverride: ""
 apiScheme: "http"
 homeportScheme: "http"
 apiHostname: waldur.local
+apiExtraHosts: []
 homeportHostname: waldur.local
+homeportExtraHosts: []
 
 affinity: {}
 
@@ -87,7 +89,7 @@ hostAliases: []
 
 waldur:
   imageName: "opennode/waldur-mastermind"
-  imageTag: "6.7.1"
+  imageTag: "6.8.3"
   initdbEnabled: true
   initdbImageName: "bitnami/postgresql"
   pullPolicy: Always
@@ -273,6 +275,9 @@ waldur:
     modePageTitle: ""
     loginLogoPath: ""
     sidebarLogoPath: ""
+    sidebarLogoDarkPath: ""
+    sidebarStyle: "dark"
+    disableDarkTheme: false
     poweredByLogoPath: ""
     faviconPath: ""
     tosHtmlPath: ""
@@ -286,7 +291,11 @@ waldur:
     supportPortalLink: ""
     tosHtml: ""
     privacyHtml: ""
-  invitationWebhookUrl: ""
+  customInvitations:
+    webhookUrl: ""
+    tokenUrl: ""
+    tokenClientId: ""
+    tokenSecret: ""
   enableStrictCheckAcceptingInvitation: false
   # Measured in weeks number
   invitationDuration:

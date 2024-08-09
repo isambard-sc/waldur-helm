@@ -82,7 +82,7 @@ Open waldur-mastermind-worker shell and execute the following command:
 
 ```bash
   # Example:
-  kubectl exec -it waldur-mastermind-worker-6d98cd98bd-wps8n -- /bin/bash
+  kubectl exec -it deployment/waldur-mastermind-worker -- /bin/bash
 ```
 
 1. Execute command to add admin user
@@ -93,10 +93,10 @@ Open waldur-mastermind-worker shell and execute the following command:
 
 ## Waldur Helm chart release upgrading
 
-Delete initdb job (if exists):
+Delete init-whitelabeling job (if exists):
 
 ```bash
-  kubectl delete job waldur-mastermind-initdb-job || true
+  kubectl delete job waldur-mastermind-init-whitelabeling-job || true
 ```
 
 Delete load features job (if exists):
