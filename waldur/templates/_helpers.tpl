@@ -48,7 +48,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 Set postgres version
 */}}
 {{- define "waldur.postgresql.version" -}}
-12
+17
 {{- end -}}
 
 {{/*
