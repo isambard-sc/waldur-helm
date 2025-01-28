@@ -28,7 +28,11 @@ metadata:
     {{ end }}
 spec:
   rules:
+  {{ if .Values.localHomeportHostname }}
+  - host: {{ .Values.localHomeportHostname }}
+  {{ else }}
   - host: {{ .Values.homeportHostname }}
+  {{ end }}
     http:
       paths:
       - path: /

@@ -21,7 +21,11 @@ metadata:
     {{ end }}
 spec:
   rules:
+  {{ if .Values.localApiHostname }}
+  - host: {{ .Values.localApiHostname }}
+  {{ else }}
   - host: {{ .Values.apiHostname }}
+  {{ end }}
     http:
       paths:
       - path: /admin/
