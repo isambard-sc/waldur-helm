@@ -87,6 +87,7 @@ spec:
             {{ if .Values.waldur.openportal.existingSecret.name }}
             - name: openportal-config
               mountPath: /etc/waldur/openportal
+              readOnly: true
             {{ end }}
             {{ if has "VALIMO" .Values.waldur.authMethods }}
             - name: waldur-valimo-certs
