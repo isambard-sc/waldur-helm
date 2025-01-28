@@ -238,6 +238,9 @@ waldur:
     customerPrefix: ""
     projectPrefix: ""
     allocationPrefix: ""
+  openportal:
+    existingSecret:
+      name: ""
   support:
     backend: "zammad" # Can be "atlassian", "zammad" or "smax"
     existingSecret:
