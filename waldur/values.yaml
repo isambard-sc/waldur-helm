@@ -56,12 +56,6 @@ nodeSelector: {}
 
 tolerations: []
 
-service:
-  type: ClusterIP
-  port: 80
-
-storageClassName: local-storage
-
 ingress:
   tls:
     enabled: false
@@ -89,13 +83,22 @@ hostAliases: []
 
 waldur:
   imageName: "opennode/waldur-mastermind"
-  imageTag: "6.8.3"
+  imageTag: "7.2.7"
   initdbEnabled: true
   initdbImageName: "bitnami/postgresql"
   pullPolicy: Always
   secretKey: "SecretKeyChangeMe"
+  secretKeyExistingSecret:
+    name: ""
+    key: ""
   supportToken: ""
+  supportTokenExistingSecret:
+    name: ""
+    key: ""
   staffToken: ""
+  staffTokenExistingSecret:
+    name: ""
+    key: ""
   debug: false
   mail:
     host: ""
@@ -134,6 +137,11 @@ waldur:
     - nb
     - ar
     - cs
+  disabledRoles:
+    - customer_manager
+    - customer_support
+    - call_manager
+    - proposal_manager
   authMethods:
     - LOCAL_SIGNIN
   socialAuthMethods: []
@@ -143,15 +151,17 @@ waldur:
     managementUrl: ""
     protectedFields: []
   defaultIdp: ""
-  keycloak_sync:
-    enabled: false
-    base_url: "http://localhost:8080/auth"
-    realm: "waldur"
-    client_id: "waldur"
-    client_secret: "waldur"
-    username: "admin"
-    password: "secret"
   remoteEduteams:
+    existingSecret:
+      name: ""
+      refreshTokenKey: ""
+      clientIDKey: ""
+      clientSecretKey: ""
+      userinfoUrlKey: ""
+      tokenUrlKey: ""
+      sshApiUrlKey: ""
+      sshApiUsernameKey: ""
+      sshApiPasswordKey: ""
     refreshToken: ""
     clientID: ""
     clientSecret: ""
@@ -167,11 +177,17 @@ waldur:
     userDN: ""
     user: ""
     password: ""
+    passwordExistingSecret:
+      name: ""
+      key: ""
     admins: ""
     support: ""
   freeipa:
     hostname: ""
     password: ""
+    passwordExistingSecret:
+      name: ""
+      key: ""
     username: ""
     verifySSL: ""
     groupnamePrefix: ""
@@ -190,6 +206,9 @@ waldur:
     managementUrl: ""
     protectedFields: []
   paypal:
+    existingSecret:
+      name:
+      secretKey: ""
     secret: ""
     clientId: ""
   invoice:
@@ -221,6 +240,8 @@ waldur:
     allocationPrefix: ""
   support:
     backend: "zammad" # Can be "atlassian", "zammad" or "smax"
+    existingSecret:
+      name: ""
     atlassian:
       servicedeskEmail: ""
       servicedeskToken: ""
@@ -291,6 +312,7 @@ waldur:
     supportPortalLink: ""
     tosHtml: ""
     privacyHtml: ""
+    autoApproveUserTOS: false
   customInvitations:
     webhookUrl: ""
     tokenUrl: ""
@@ -316,6 +338,7 @@ waldur:
     imageName: "opennode/waldur-homeport"
     matomoUrlBase: ""
     matomoSiteId: ""
+    customSentryURL: ""
     userMandatoryFields: {}
     userRegistrationHiddenFields: {}
     docsLink: "https://docs.waldur.com"
@@ -324,6 +347,12 @@ waldur:
     enabled: false
     includeAnnotations: true
   uvkEverypay:
+    existingSecret:
+      name:
+      everypayUsernameKey: ""
+      everypayPasswordKey: ""
+      azureClientIDKey: ""
+      azureClientSecretKey: ""
     enabled: false
     imageTag: latest
     uvkServer: "https://uvk-test.ut.ee/client/a74/server.php?format=JSON&action=uvk__"
@@ -339,6 +368,18 @@ bootstrap:
   enabled: false
   script: "bootstrap.sh"
   dir: "bootstrap"
+
+networkPolicy:
+  enabled: false
+
+readonlyDB:
+  enabled: false
+  username: ""
+  password: ""
+
+readonlyDBReplica:
+  enabled: false
+  replicaHost: "waldur-postgres-repl"
 
 externalDB:
   enabled: false
@@ -365,7 +406,7 @@ postgresql:
         cpu: "1000m"
   image:
     registry: "docker.io"
-    tag: 12
+    tag: "16.4.0-debian-12-r19"
   metrics:
     enabled: false
 
@@ -379,10 +420,10 @@ postgresqlha:
     repmgrPassword: repmgr
     replicaCount: 3
     image:
-      tag: "12.15.0-debian-11-r12"
+      tag: "16.4.0-debian-12-r26"
   pgpool:
     image:
-      tag: "4.4.3-debian-11-r6"
+      tag: "4.5.4-debian-12-r2"
 
 postgresBackup:
   enabled: false
@@ -408,8 +449,16 @@ rabbitmq:
   image:
     registry: "docker.io"
     repository: "bitnami/rabbitmq"
-    tag: 3.8.14
+    tag: "4.0.2-debian-12-r0"
   replicaCount: 3
+  extraPlugins: "rabbitmq_auth_backend_ldap rabbitmq_mqtt rabbitmq_web_mqtt rabbitmq_management"
+  resources:
+    requests:
+      cpu: 1
+      memory: 512Mi
+    limits:
+      cpu: 2
+      memory: 1024Mi
   persistence:
     enabled: true
     size: "10Gi"

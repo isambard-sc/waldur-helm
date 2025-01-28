@@ -11,11 +11,16 @@ data:
       {{ if has "academic_shared_domain" .Values.waldur.features }}
       description: Resource allocator
       {{ end }}
+      {{ if has "customer_owner" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
+      {{ end }}
       add_permissions:
         {{ if has "owner_can_register_service_provider" .Values.waldur.features }}
         - SERVICE_PROVIDER.REGISTER
         {{ end }}
-        {{ if not (has "only_staff_manages_services" .Values.waldur.features) }}
+        {{ if not (has "owner_can_approve_order" .Values.waldur.features) }}
         - ORDER.APPROVE
         {{ end }}
         {{ if has "owners_can_manage_owners" .Values.waldur.features }}
@@ -32,7 +37,7 @@ data:
         {{ if not (has "owner_can_register_service_provider" .Values.waldur.features) }}
         - SERVICE_PROVIDER.REGISTER
         {{ end }}
-        {{ if has "only_staff_manages_services" .Values.waldur.features }}
+        {{ if has "owner_can_approve_order" .Values.waldur.features }}
         - ORDER.APPROVE
         {{ end }}
         {{ if not (has "owners_can_manage_owners" .Values.waldur.features) }}
@@ -46,12 +51,31 @@ data:
         - CUSTOMER.DELETE
         {{ end }}
 
+    - role: CUSTOMER.MANAGER
+      {{ if has "customer_manager" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
+      {{ end }}
+
+    - role: CUSTOMER.SUPPORT
+      {{ if has "customer_support" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
+      {{ end }}
+
     - role: PROJECT.ADMIN
       {{ if has "academic_domain" .Values.waldur.features }}
       description: Member
       {{ end }}
       {{ if has "academic_shared_domain" .Values.waldur.features }}
       description: Co-PI
+      {{ end }}
+      {{ if has "project_admin" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
       {{ end }}
       add_permissions:
         {{ if has "admin_can_approve_order" .Values.waldur.features }}
@@ -69,6 +93,11 @@ data:
       {{ if has "academic_shared_domain" .Values.waldur.features }}
       description: PI
       {{ end }}
+      {{ if has "project_manager" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
+      {{ end }}
       add_permissions:
         {{ if has "manager_can_approve_order" .Values.waldur.features }}
         - ORDER.APPROVE
@@ -79,13 +108,41 @@ data:
         {{ end }}
 
     - role: PROJECT.MEMBER
-      {{ if has "enable_project_member_role" .Values.waldur.features }}
-      is_active: true
-      {{ else }}
+      {{ if has "project_member" .Values.waldur.disabledRoles }}
       is_active: false
+      {{ else }}
+      is_active: true
       {{ end }}
       {{ if has "academic_domain" .Values.waldur.features }}
       description: Guest
       {{ else }}
       description: Project member
+      {{ end }}
+
+    - role: OFFERING.MANAGER
+      {{ if has "offering_manger" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
+      {{ end }}
+
+    - role: CALL.REVIEWER
+      {{ if has "call_reviewer" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
+      {{ end }}
+
+    - role: CALL.MANAGER
+      {{ if has "call_manager" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
+      {{ end }}
+
+    - role: PROPOSAL.MANAGER
+      {{ if has "proposal_manager" .Values.waldur.disabledRoles }}
+      is_active: false
+      {{ else }}
+      is_active: true
       {{ end }}

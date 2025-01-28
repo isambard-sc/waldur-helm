@@ -75,12 +75,6 @@ nodeSelector: {}
 
 tolerations: []
 
-service:
-  type: ClusterIP
-  port: 80
-
-storageClassName: local-storage
-
 ingress:
   tls:
     enabled: true
@@ -88,8 +82,8 @@ ingress:
     customMastermindSecretName: ""
     customHomeportSecretName: ""
     secretsDir: "tls"  # Enabled only if source == `secret`
-  whitelistSourceRange: '172.17.36.95/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.17.36.8/32,172.17.152.11/32,172.18.128.77/32'
-  whitelistSourceRangeAdmin: '172.17.36.95/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32'
+  whitelistSourceRange: '172.17.36.95/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.17.36.8/32,172.17.152.11/32,172.18.128.77/32,172.18.64.0/24'
+  whitelistSourceRangeAdmin: '172.17.36.95/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.18.64.0/24'
 
 celery:
   worker:
@@ -112,6 +106,9 @@ waldur:
   initdbImageName: "bitnami/postgresql"
   pullPolicy: Always
   secretKey: "SecretKeyChangeMe"
+  secretKeyExistingSecret:
+    name: ""
+    key: ""
   supportToken: "support-token"
   staffToken: "staff-token"
   debug: true
@@ -155,6 +152,9 @@ waldur:
     - nb
     - ar
     - cs
+  disabledRoles:
+    - customer_manager
+    - customer_support
   authMethods:
     - LOCAL_SIGNIN
     - LDAP
@@ -312,6 +312,7 @@ waldur:
       <html>
       Privacy
       </html>
+    autoApproveUserTOS: false
   customInvitations:
     webhookUrl: "https://test-webhook.example.com"
     tokenUrl: "https://test-token.example.com"
@@ -384,6 +385,7 @@ waldur:
     imageName: "opennode/waldur-homeport"
     matomoUrlBase: ""
     matomoSiteId: ""
+    customSentryURL: ""
     userMandatoryFields: {}
     userRegistrationHiddenFields: {}
     docsLink: "https://docs.waldur.com"
@@ -407,6 +409,18 @@ bootstrap:
   enabled: true
   script: "bootstrap.sh"
   dir: "test/bootstrap"
+
+networkPolicy:
+  enabled: true
+
+readonlyDBReplica:
+  enabled: false
+  replicaHost: "waldur-postgres-repl"
+
+readonlyDB:
+  enabled: false
+  username: ""
+  password: ""
 
 externalDB:
   enabled: false
@@ -432,7 +446,7 @@ postgresql:
         memory: "2048Mi"
         cpu: "1000m"
   image:
-    tag: 12
+    tag: "16.4.0-debian-12-r19"
   metrics:
     enabled: true
 
@@ -446,11 +460,11 @@ postgresqlha:
     repmgrPassword: repmgr
     replicaCount: 1
     image:
-      tag: "12.15.0-debian-11-r12"
+      tag: "16.4.0-debian-12-r26"
   pgpool:
     adminPassword: "2ILwp6GBDKNRMymXoDU="
     image:
-      tag: "4.4.3-debian-11-r6"
+      tag: "4.5.4-debian-12-r2"
 
 postgresBackup:
   enabled: true
@@ -476,8 +490,15 @@ rabbitmq:
   # The values are in use only if rabbitmq.enabled = true
   image:
     repository: "bitnami/rabbitmq"
-    tag: 3.8.14
+    tag: "4.0.2-debian-12-r0"
   replicaCount: 1
+  resources:
+    requests:
+      cpu: 1
+      memory: 512Mi
+    limits:
+      cpu: 2
+      memory: 1024Mi
   persistence:
     enabled: true
     size: "10Gi"

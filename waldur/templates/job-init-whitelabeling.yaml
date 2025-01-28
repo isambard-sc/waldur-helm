@@ -34,14 +34,26 @@ spec:
             - name: whitelabeling-yaml
               mountPath: /etc/waldur/whitelabeling.yaml
               subPath: whitelabeling.yaml
+            - name: marketplace-script-yaml
+              mountPath: /etc/waldur/marketplace-script.yaml
+              subPath: marketplace-script.yaml
+            - name: marketplace-yaml
+              mountPath: /etc/waldur/marketplace.yaml
+              subPath: marketplace.yaml
             - name: icons
               mountPath: /etc/waldur/icons
             - name: languages-yaml
               mountPath: /etc/waldur/languages.yaml
               subPath: languages.yaml
+            {{ if .Values.waldur.support.existingSecret.name }}
+            - name: existing-support-secret
+              mountPath: /etc/secret-volume
+              readOnly: true
+            {{ else }}
             - name: constance-settings-yaml
               mountPath: /etc/waldur/support.yaml
               subPath: support.yaml
+            {{ end }}
           resources:
             {{- toYaml .Values.apiResources | nindent 12 }}
 {{ if has "SAML2" .Values.waldur.authMethods }}
@@ -100,12 +112,24 @@ spec:
       - name: whitelabeling-yaml
         configMap:
           name: mastermind-whitelabeling-yaml
+      - name: marketplace-script-yaml
+        configMap:
+          name: mastermind-marketplace-script-yaml
+      - name: marketplace-yaml
+        configMap:
+          name: mastermind-marketplace-yaml
       - name: languages-yaml
         configMap:
           name: mastermind-languages-yaml
+      {{ if .Values.waldur.support.existingSecret.name }}
+      - name: existing-support-secret
+        secret:
+          secretName: {{ .Values.waldur.support.existingSecret.name }}
+      {{ else }}
       - name: constance-settings-yaml
         configMap:
           name: mastermind-support-yaml
+      {{ end }}
       {{ if has "SAML2" .Values.waldur.authMethods }}
       - name: waldur-saml2-certs
         secret:

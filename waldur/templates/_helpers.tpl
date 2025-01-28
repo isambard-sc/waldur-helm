@@ -136,6 +136,19 @@ amqp://{{ .auth.username }}:{{ .auth.password }}@{{ $rmqHost }}:{{ default 5672 
 {{- end -}}
 {{- end -}}
 
+{{/*
+Set rabbitmq host
+*/}}
+{{- define "waldur.rabbitmq.rmqHost" -}}
+{{- $rmqHost := "" -}}
+{{- if .Values.rabbitmq.enabled -}}
+{{- $rmqHost = list .Release.Name "rabbitmq" | join "-" -}}
+{{- else -}}
+{{- $rmqHost = .Values.rabbitmq.host -}}
+{{- end -}}
+{{ $rmqHost }}
+{{- end -}}
+
 
 {{/*
 Add environment variables to configure private database
@@ -167,8 +180,8 @@ Add environment variables to configure database values and Sentry environment
 - name: GLOBAL_SECRET_KEY
   valueFrom:
     secretKeyRef:
-      name: waldur-secret
-      key: GLOBAL_SECRET_KEY
+      name: {{ .Values.waldur.secretKeyExistingSecret.name | default "waldur-secret" }}
+      key: {{ .Values.waldur.secretKeyExistingSecret.key | default "GLOBAL_SECRET_KEY" }}
 
 - name: POSTGRESQL_HOST
   value: {{ include "waldur.postgresql.host" . }}
@@ -195,6 +208,31 @@ Add environment variables to configure database values and Sentry environment
 - name: POSTGRESQL_NAME
   value: {{ include "waldur.postgresql.dbname" . }}
 
+{{ if .Values.readonlyDB.enabled }}
+- name: POSTGRESQL_READONLY_USER
+  {{ if .Values.readonlyDB.username }}
+  valueFrom:
+    secretKeyRef:
+      name: waldur-secret
+      key: READONLY_DB_USERNAME
+  {{ else }}
+  value: {{ include "waldur.postgresql.user" . }}
+  {{ end }}
+
+- name: POSTGRESQL_READONLY_PASSWORD
+  {{ if .Values.readonlyDB.password }}
+  valueFrom:
+    secretKeyRef:
+      name: waldur-secret
+      key: READONLY_DB_PASSWORD
+  {{ else }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "waldur.postgresql.secret" . }}
+      key: {{ include "waldur.postgresql.secret.passwordKey" . }}
+  {{ end }}
+{{ end }}
+
 {{ if .Values.waldur.sentryDSN }}
 - name: SENTRY_DSN
   value: {{ .Values.waldur.sentryDSN | quote }}
@@ -204,6 +242,73 @@ Add environment variables to configure database values and Sentry environment
     fieldRef:
       fieldPath: metadata.namespace
 {{ end }}
+
+{{- if .Values.waldur.remoteEduteams.existingSecret.name -}}
+- name: REMOTE_EDUTEAMS_REFRESH_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.remoteEduteams.existingSecret.name }}
+      key: {{ .Values.waldur.remoteEduteams.existingSecret.refreshTokenKey }}
+- name: REMOTE_EDUTEAMS_CLIENT_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.remoteEduteams.existingSecret.name }}
+      key: {{ .Values.waldur.remoteEduteams.existingSecret.clientIDKey }}
+- name: REMOTE_EDUTEAMS_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.remoteEduteams.existingSecret.name }}
+      key: {{ .Values.waldur.remoteEduteams.existingSecret.clientSecretKey }}
+- name: REMOTE_EDUTEAMS_USERINFO_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.remoteEduteams.existingSecret.name }}
+      key: {{ .Values.waldur.remoteEduteams.existingSecret.userinfoUrlKey }}
+- name: REMOTE_EDUTEAMS_TOKEN_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.remoteEduteams.existingSecret.name }}
+      key: {{ .Values.waldur.remoteEduteams.existingSecret.tokenUrlKey }}
+- name: REMOTE_EDUTEAMS_SSH_API_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.remoteEduteams.existingSecret.name }}
+      key: {{ .Values.waldur.remoteEduteams.existingSecret.sshApiUrlKey }}
+- name: REMOTE_EDUTEAMS_SSH_API_USERNAME
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.remoteEduteams.existingSecret.name }}
+      key: {{ .Values.waldur.remoteEduteams.existingSecret.sshApiUsernameKey }}
+- name: REMOTE_EDUTEAMS_SSH_API_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.remoteEduteams.existingSecret.name }}
+      key: {{ .Values.waldur.remoteEduteams.existingSecret.sshApiPasswordKey }}
+{{- end -}}
+
+{{- if .Values.waldur.ldap.passwordExistingSecret.name -}}
+- name: AUTH_LDAP_BIND_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.ldap.passwordExistingSecret.name }}
+      key: {{ .Values.waldur.ldap.passwordExistingSecret.key }}
+{{- end -}}
+
+{{- if .Values.waldur.freeipa.passwordExistingSecret.name -}}
+- name: FREEIPA_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.freeipa.passwordExistingSecret.name }}
+      key: {{ .Values.waldur.freeipa.passwordExistingSecret.key }}
+{{- end -}}
+
+{{- if .Values.waldur.paypal.existingSecret.name -}}
+- name: PAYPAL_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.paypal.existingSecret.name }}
+      key: {{ .Values.waldur.paypal.existingSecret.secretKey }}
+{{- end -}}
 
 {{ if .Values.proxy.httpsProxy }}
 - name: https_proxy

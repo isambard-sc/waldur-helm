@@ -26,6 +26,35 @@ data:
         },
     }
 
+    {{- if .Values.readonlyDB.enabled }}
+    DATABASES['readonly'] = {
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': os.environ.get('POSTGRESQL_NAME'),
+        'HOST': os.environ.get('POSTGRESQL_HOST'),
+        'PORT': os.environ.get('POSTGRESQL_PORT'),
+        'USER': os.environ.get('POSTGRESQL_READONLY_USER'),
+        'PASSWORD': os.environ.get('POSTGRESQL_READONLY_PASSWORD'),
+        'OPTIONS': {
+            'target_session_attrs': 'read-only',
+        },
+    }
+    {{- end }}
+
+    {{- if .Values.readonlyDBReplica.enabled }}
+    DATABASES['read_db'] = {
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': os.environ.get('POSTGRESQL_NAME'),
+        'HOST': "{{ .Values.readonlyDBReplica.replicaHost }}",
+        'PORT': os.environ.get('POSTGRESQL_PORT'),
+        'USER': os.environ.get('POSTGRESQL_USER'),
+        'PASSWORD': os.environ.get('POSTGRESQL_PASSWORD'),
+        },
+    }
+    DATABASE_ROUTERS = [
+    'waldur_core.core.database_routers.ReadOnlyReplicaRouter',
+    ]
+    {{- end }}
+
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
@@ -41,6 +70,14 @@ data:
     postgresql_password = os.environ.get('POSTGRESQL_PASSWORD')
     postgresql_name = 'celery_results'
     CELERY_RESULT_BACKEND = f'db+postgresql://{postgresql_user}:{postgresql_password}@{postgresql_host}:{postgresql_port}/{postgresql_name}'
+
+    RABBITMQ_MQTT = {
+        "HOST": {{ include "waldur.rabbitmq.rmqHost" . | quote }},
+        "PORT": 1883,
+        "USER": {{ .Values.rabbitmq.auth.username | quote }},
+        "PASSWORD": {{ .Values.rabbitmq.auth.password | quote }},
+        "MANAGEMENT_PORT": 15672,
+    }
 
     EMAIL_HOST = '{{ .Values.waldur.mail.host }}'
     EMAIL_PORT = {{ .Values.waldur.mail.port | default 25 | int }}
@@ -63,14 +100,14 @@ data:
 
     {{ if .Values.waldur.remoteEduteams }}
     WALDUR_AUTH_SOCIAL.update({
-        'REMOTE_EDUTEAMS_REFRESH_TOKEN': '{{ .Values.waldur.remoteEduteams.refreshToken }}',
-        'REMOTE_EDUTEAMS_CLIENT_ID': '{{ .Values.waldur.remoteEduteams.clientID }}',
-        'REMOTE_EDUTEAMS_SECRET': '{{ .Values.waldur.remoteEduteams.clientSecret }}',
-        'REMOTE_EDUTEAMS_USERINFO_URL': '{{ .Values.waldur.remoteEduteams.userinfoUrl }}',
-        'REMOTE_EDUTEAMS_TOKEN_URL': '{{ .Values.waldur.remoteEduteams.tokenUrl }}',
-        'REMOTE_EDUTEAMS_SSH_API_URL': '{{ .Values.waldur.remoteEduteams.sshApiUrl }}',
-        'REMOTE_EDUTEAMS_SSH_API_USERNAME': '{{ .Values.waldur.remoteEduteams.sshApiUsername }}',
-        'REMOTE_EDUTEAMS_SSH_API_PASSWORD': '{{ .Values.waldur.remoteEduteams.sshApiPassword }}',
+        'REMOTE_EDUTEAMS_REFRESH_TOKEN': os.environ.get("REMOTE_EDUTEAMS_REFRESH_TOKEN", '{{ .Values.waldur.remoteEduteams.refreshToken | default "" }}'),
+        'REMOTE_EDUTEAMS_CLIENT_ID': os.environ.get("REMOTE_EDUTEAMS_CLIENT_ID", '{{ .Values.waldur.remoteEduteams.clientID | default "" }}'),
+        'REMOTE_EDUTEAMS_SECRET': os.environ.get("REMOTE_EDUTEAMS_SECRET", '{{ .Values.waldur.remoteEduteams.clientSecret | default "" }}'),
+        'REMOTE_EDUTEAMS_USERINFO_URL': os.environ.get("REMOTE_EDUTEAMS_USERINFO_URL", '{{ .Values.waldur.remoteEduteams.userinfoUrl | default "" }}'),
+        'REMOTE_EDUTEAMS_TOKEN_URL': os.environ.get("REMOTE_EDUTEAMS_TOKEN_URL", '{{ .Values.waldur.remoteEduteams.tokenUrl | default "" }}'),
+        'REMOTE_EDUTEAMS_SSH_API_URL': os.environ.get("REMOTE_EDUTEAMS_SSH_API_URL", '{{ .Values.waldur.remoteEduteams.sshApiUrl | default "" }}'),
+        'REMOTE_EDUTEAMS_SSH_API_USERNAME': os.environ.get("REMOTE_EDUTEAMS_SSH_API_USERNAME", '{{ .Values.waldur.remoteEduteams.sshApiUsername | default "" }}'),
+        'REMOTE_EDUTEAMS_SSH_API_PASSWORD': os.environ.get("REMOTE_EDUTEAMS_SSH_API_PASSWORD", '{{ .Values.waldur.remoteEduteams.sshApiPassword | default "" }}'),
         {{ if .Values.waldur.remoteEduteams.enableSync }}
         'ENABLE_EDUTEAMS_SYNC': True,
         {{ end }}
@@ -105,7 +142,7 @@ data:
 
     # Credentials for admin user
     AUTH_LDAP_BIND_DN = 'uid={{ .Values.waldur.ldap.user }},' + AUTH_LDAP_USER_BASE
-    AUTH_LDAP_BIND_PASSWORD = '{{ .Values.waldur.ldap.password }}'
+    AUTH_LDAP_BIND_PASSWORD = os.environ.get("AUTH_LDAP_BIND_PASSWORD", '{{ .Values.waldur.ldap.password | default "" }}')
 
     # Populate the Django user from the LDAP directory.
     AUTH_LDAP_USER_ATTR_MAP = {
@@ -135,7 +172,7 @@ data:
         'ENABLED': True,
         'GROUPNAME_PREFIX': '{{ .Values.waldur.freeipa.groupnamePrefix }}',
         'HOSTNAME': '{{ .Values.waldur.freeipa.hostname }}',
-        'PASSWORD': '{{ .Values.waldur.freeipa.password }}',
+        'PASSWORD': os.environ.get("FREEIPA_PASSWORD", '{{ .Values.waldur.freeipa.password | default "" }}'),
         'USERNAME': '{{ .Values.waldur.freeipa.username }}',
         'USERNAME_PREFIX': '{{ .Values.waldur.freeipa.usernamePrefix }}',
         'VERIFY_SSL': {{ .Values.waldur.freeipa.verifySSL }},
@@ -178,16 +215,9 @@ data:
     WALDUR_CORE["USER_REGISTRATION_HIDDEN_FIELDS"] = {{ .Values.waldur.homeport.userRegistrationHiddenFields | toJson }}
     {{ end }}
 
-    {{ if has "only_staff_manages_services" .Values.waldur.features }}
-    WALDUR_CORE['ONLY_STAFF_MANAGES_SERVICES'] = True
-    {{ end }}
-
     {{ if has "create_default_project_on_organization_creation" .Values.waldur.features }}
     WALDUR_CORE['CREATE_DEFAULT_PROJECT_ON_ORGANIZATION_CREATION'] = True
     {{ end }}
-
-    # Disable geoip location till HomePort releases maps to a stable deployment
-    WALDUR_CORE['ENABLE_GEOIP'] = False
 
     {{ if has "only_staff_can_invite_users" .Values.waldur.features }}
     WALDUR_CORE['ONLY_STAFF_CAN_INVITE_USERS'] = True
@@ -209,9 +239,6 @@ data:
     WALDUR_CORE["INVITATION_WEBHOOK_TOKEN_SECRET"] = {{ default "" .Values.waldur.customInvitations.tokenSecret | quote }}
     {{ end }}
 
-    {{ if .Values.waldur.enableStrictCheckAcceptingInvitation }}
-    WALDUR_CORE["ENABLE_STRICT_CHECK_ACCEPTING_INVITATION"] = True
-    {{ end }}
 
     {{ if has "protect_freeipa_user_details" .Values.waldur.features }}
     WALDUR_CORE['PROTECT_USER_DETAILS_FOR_REGISTRATION_METHODS'] = ['FREEIPA']
@@ -231,36 +258,6 @@ data:
 
     {{ if .Values.waldur.homeport.matomoSiteId }}
     WALDUR_CORE['MATOMO_SITE_ID'] = {{ .Values.waldur.homeport.matomoSiteId | quote }}
-    {{ end }}
-
-    #
-    # waldur-marketplace
-    #
-
-    {{ if has "disable_resource_end_date" .Values.waldur.features }}
-    WALDUR_MARKETPLACE['ENABLE_RESOURCE_END_DATE'] = False
-    {{ end }}
-
-    {{ if .Values.waldur.marketplace.notify_staff }}
-    WALDUR_MARKETPLACE['NOTIFY_STAFF_ABOUT_APPROVALS'] = True
-    {{ end }}
-
-    {{ if .Values.waldur.marketplace.script.enabled }}
-    WALDUR_MARKETPLACE_SCRIPT['SCRIPT_RUN_MODE'] = 'k8s'
-    WALDUR_MARKETPLACE_SCRIPT['K8S_CONFIG_PATH'] = '/etc/waldur/kubeconfig'
-    {{ if .Values.waldur.marketplace.script.k8sNamespace }}
-    WALDUR_MARKETPLACE_SCRIPT['K8S_NAMESPACE'] = "{{ .Values.waldur.marketplace.script.k8sNamespace }}"
-    {{ end }}
-    {{ if .Values.waldur.marketplace.script.dockerImages }}
-    WALDUR_MARKETPLACE_SCRIPT['DOCKER_IMAGES'] = {{ .Values.waldur.marketplace.script.dockerImages | toJson }}
-    {{ end }}
-    {{ if .Values.waldur.marketplace.script.jobTimeout }}
-    WALDUR_MARKETPLACE_SCRIPT['K8S_JOB_TIMEOUT'] = {{ .Values.waldur.marketplace.script.jobTimeout }}
-    {{ end }}
-    {{ end }}
-
-    {{ if has "waldur_marketplace_notify_about_resource_change_disabled" .Values.waldur.features }}
-    WALDUR_MARKETPLACE['NOTIFY_ABOUT_RESOURCE_CHANGE'] = False
     {{ end }}
 
     #
@@ -309,6 +306,12 @@ data:
     })
     {{ end }}
 
+    {{ if has "openportal" .Values.waldur.features }}
+    WALDUR_OPENPORTAL.update({
+        'ENABLED': True,
+    })
+    {{ end }}
+
     {{ if has "slurm" .Values.waldur.features }}
     # See also http://docs.waldur.com/SLURM+plugin+configuration
     WALDUR_SLURM.update({
@@ -335,13 +338,13 @@ data:
     {{ end }}
 
     {{ if has "allow_direct_external_network_connection" .Values.waldur.features }}
-    WALDUR_OPENSTACK_TENANT.update({
+    WALDUR_OPENSTACK.update({
         'ALLOW_DIRECT_EXTERNAL_NETWORK_CONNECTION': True,
     })
     {{ end }}
 
     {{ if (has "show_openstack_console" .Values.waldur.features) }}
-    WALDUR_OPENSTACK_TENANT.update({
+    WALDUR_OPENSTACK.update({
         'ALLOW_CUSTOMER_USERS_OPENSTACK_CONSOLE_ACCESS': True,
     })
     {{ end }}
@@ -363,7 +366,7 @@ data:
         'BACKEND': {
             'mode': 'live',
             'client_id': '{{ .Values.waldur.paypal.clientId }}',
-            'client_secret': '{{ .Values.waldur.paypal.secret }}',
+            'client_secret': os.environ.get("PAYPAL_SECRET", '{{ .Values.waldur.paypal.secret | default "" }})',
             'currency_name': 'EUR',
         }
     })
@@ -463,7 +466,7 @@ data:
     # Added to enable SSH CA support
     SSH_PRIVATE_SIGNING_KEY_PATH = "/etc/waldur/ssh-signing-key/private"
 
-    # Added to handle CORS - see 
+    # Added to handle CORS - see
     # https://github.com/waldur/waldur-homeport?tab=readme-ov-file#backend-configuration
     try:
         from corsheaders.defaults import default_headers

@@ -91,15 +91,18 @@ Test release installation and readiness:
   script:
     - set -xv
     - helm dep update waldur/
-    - helm install waldur waldur/ --wait -f waldur/test/values.yaml --timeout 10m0s
+    - helm install waldur waldur/ --wait -f waldur/test/values.yaml --timeout 20m0s
   after_script:
     - set -xv
     - export KUBECONFIG=${K8S_CONFIG_WALDUR_HELM_TEST}
     - helm list
+    - kubectl apply -f waldur/test/k8s/networkpolicy-override.yaml
+    - kubectl delete networkpolicy namespace-isolation --ignore-not-found
     - kubectl get pods
     - |
-      for NAME in $(kubectl get pods --field-selector status.phase=Failed -o name); do
+      for NAME in $(kubectl get pods -l app.kubernetes.io/instance=waldur --field-selector status.phase!=Running -o name); do
         echo "Pod name: $NAME"
+        echo "Status: $(kubectl get pod $NAME -o jsonpath={.status.phase})"
         kubectl logs $NAME --tail 100 --all-containers
         echo ----
       done
@@ -128,6 +131,7 @@ Test ArgoCD sync:
   extends: .Test ArgoCD template
   stage: test
   script:
+    - echo ${APPLICATION_NAME}
     - $SSH_COMMAND "argocd login 10.43.40.117:80 --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --name default --insecure"
     - $SSH_COMMAND "argocd account get-user-info"
     - $SSH_COMMAND "argocd app list"
@@ -140,6 +144,11 @@ Stop argocd app:
   extends: .Test ArgoCD template
   stage: .pre
   script:
+    - echo ${APPLICATION_NAME}
+    - $SSH_COMMAND "argocd login 10.43.40.117:80 --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --name default --insecure"
+    - $SSH_COMMAND "argocd account get-user-info"
+    - $SSH_COMMAND "argocd app list"
+    - $SSH_COMMAND "argocd app terminate-op $APPLICATION_NAME" || true
     - $SSH_COMMAND "argocd app delete $APPLICATION_NAME"
     # There is no option to wait until application is deleted
     # Also, argocd doesn't delete an application record, it changes state to "Missing" instead
