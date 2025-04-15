@@ -10,8 +10,8 @@ data:
     site_phone: {{ .Values.waldur.site.phone | default "" | quote }}
     short_page_title: {{ .Values.waldur.whitelabeling.shortPageTitle | default "" | quote }}
     full_page_title: {{ .Values.waldur.whitelabeling.modePageTitle | default "" | quote }}
+    homeport_url: {{ printf "%s://%s/" .Values.homeportScheme .Values.homeportHostname }}
     brand_color: {{ .Values.waldur.whitelabeling.brandColor | default "" | quote }}
-    brand_label_color: {{ .Values.waldur.whitelabeling.brandLabelColor | default "" | quote }}
     hero_link_label: {{ .Values.waldur.whitelabeling.heroLinkLabel | default "" | quote }}
     hero_link_url: {{ .Values.waldur.whitelabeling.heroLinkUrl | default "" | quote }}
     site_description: {{ .Values.waldur.whitelabeling.siteDescription | default "" | quote }}
@@ -23,6 +23,11 @@ data:
     disable_dark_theme: {{ .Values.waldur.whitelabeling.disableDarkTheme | default false }}
     auto_approve_user_tos: {{ .Values.waldur.whitelabeling.autoApproveUserTOS | default false }}
     enable_strict_check_accepting_invitation: {{ .Values.waldur.enableStrictCheckAcceptingInvitation | default false }}
+    
+    {{ if .Values.waldur.defaultIdp }}
+    default_idp: {{ .Values.waldur.defaultIdp | quote }}
+    {{ end }}
+
     {{ if .Values.waldur.whitelabeling.poweredByLogoPath }}
     powered_by_logo: "/etc/waldur/icons/poweredby_logo.png"
     {{ end }}

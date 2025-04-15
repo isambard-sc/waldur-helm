@@ -17,7 +17,7 @@ data:
 
     DATABASES = {
         'default': {
-            'ENGINE': 'django.db.backends.postgresql_psycopg2',
+            'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.environ.get('POSTGRESQL_NAME'),
             'HOST': os.environ.get('POSTGRESQL_HOST'),
             'PORT': os.environ.get('POSTGRESQL_PORT'),
@@ -27,22 +27,23 @@ data:
     }
 
     {{- if .Values.readonlyDB.enabled }}
+    # connection intended for /api/query/ requests
     DATABASES['readonly'] = {
-        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.environ.get('POSTGRESQL_NAME'),
         'HOST': os.environ.get('POSTGRESQL_HOST'),
         'PORT': os.environ.get('POSTGRESQL_PORT'),
         'USER': os.environ.get('POSTGRESQL_READONLY_USER'),
         'PASSWORD': os.environ.get('POSTGRESQL_READONLY_PASSWORD'),
         'OPTIONS': {
-            'target_session_attrs': 'read-only',
-        },
+            'options': '-c default_transaction_read_only=on'
+        }
     }
     {{- end }}
 
     {{- if .Values.readonlyDBReplica.enabled }}
     DATABASES['read_db'] = {
-        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.environ.get('POSTGRESQL_NAME'),
         'HOST': "{{ .Values.readonlyDBReplica.replicaHost }}",
         'PORT': os.environ.get('POSTGRESQL_PORT'),
@@ -69,12 +70,12 @@ data:
     postgresql_user = os.environ.get('POSTGRESQL_USER')
     postgresql_password = os.environ.get('POSTGRESQL_PASSWORD')
     postgresql_name = 'celery_results'
-    CELERY_RESULT_BACKEND = f'db+postgresql://{postgresql_user}:{postgresql_password}@{postgresql_host}:{postgresql_port}/{postgresql_name}'
-    CELERY_RESULT_ENGINE_OPTIONS = {'pool_recycle': 60, 'pool_pre_ping': True, 'pool_use_lifo': True}
+    CELERY_RESULT_BACKEND = f'db+postgresql+psycopg://{postgresql_user}:{postgresql_password}@{postgresql_host}:{postgresql_port}/{postgresql_name}'
 
-    RABBITMQ_MQTT = {
+    RABBITMQ = {
         "HOST": {{ include "waldur.rabbitmq.rmqHost" . | quote }},
-        "PORT": 1883,
+        "MQTT_PORT": 1883,
+        "STOMP_PORT": 61613,
         "USER": {{ .Values.rabbitmq.auth.username | quote }},
         "PASSWORD": {{ .Values.rabbitmq.auth.password | quote }},
         "MANAGEMENT_PORT": 15672,
@@ -97,7 +98,6 @@ data:
     {{ end }}
 
     WALDUR_CORE['AUTHENTICATION_METHODS'] = {{ .Values.waldur.authMethods | toJson }}
-    WALDUR_CORE['HOMEPORT_URL'] = '{{ printf "%s://%s/" .Values.homeportScheme .Values.homeportHostname }}'
 
     {{ if .Values.waldur.remoteEduteams }}
     WALDUR_AUTH_SOCIAL.update({
@@ -164,27 +164,6 @@ data:
     }
     {{ end }}
 
-    #
-    # waldur-freeipa
-    #
-
-    {{ if (has "freeipa" .Values.waldur.features) }}
-    WALDUR_FREEIPA.update({
-        'ENABLED': True,
-        'GROUPNAME_PREFIX': '{{ .Values.waldur.freeipa.groupnamePrefix }}',
-        'HOSTNAME': '{{ .Values.waldur.freeipa.hostname }}',
-        'PASSWORD': os.environ.get("FREEIPA_PASSWORD", '{{ .Values.waldur.freeipa.password | default "" }}'),
-        'USERNAME': '{{ .Values.waldur.freeipa.username }}',
-        'USERNAME_PREFIX': '{{ .Values.waldur.freeipa.usernamePrefix }}',
-        'VERIFY_SSL': {{ .Values.waldur.freeipa.verifySSL }},
-    })
-    {{ end }}
-
-    {{ if (has "freeipa_group_synchronization_disabled" .Values.waldur.features) }}
-    WALDUR_FREEIPA.update({
-        'GROUP_SYNCHRONIZATION_ENABLED': False,
-    })
-    {{ end }}
 
     {{ if (has "VALIMO" .Values.waldur.authMethods) }}
     WALDUR_AUTH_VALIMO.update({
@@ -321,9 +300,6 @@ data:
         'PROJECT_PREFIX': '{{ .Values.waldur.slurm.projectPrefix }}',
         'ALLOCATION_PREFIX': '{{ .Values.waldur.slurm.allocationPrefix }}',
     })
-    {{ if .Values.waldur.ssh_private_key_path }}
-    WALDUR_SLURM['PRIVATE_KEY_PATH'] = '/var/lib/waldur/id_rsa'
-    {{ end }}
     {{ end }}
     #
     # waldur-openstack
@@ -435,9 +411,6 @@ data:
         'LOCAL_IDP_PROTECTED_FIELDS': {{ .Values.waldur.localIdp.protectedFields | toJson }},
     })
 
-    {{ if .Values.waldur.defaultIdp }}
-    WALDUR_CORE["DEFAULT_IDP"] = {{ .Values.waldur.defaultIdp | quote }}
-    {{ end }}
 
     {{ if .Values.waldur.mastermindUrl }}
     WALDUR_CORE["MASTERMIND_URL"] = {{ .Values.waldur.mastermindUrl | quote }}

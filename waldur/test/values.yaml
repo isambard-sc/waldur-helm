@@ -41,10 +41,10 @@ workerResources:
 homeportResources:
   requests:
     memory: 1000Mi
-    cpu: 500m
+    cpu: 250m
   limits:
     memory: 2000Mi
-    cpu: 1000m
+    cpu: 500m
 
 beatResources:
   requests:
@@ -76,6 +76,7 @@ nodeSelector: {}
 tolerations: []
 
 ingress:
+  className: "nginx"
   tls:
     enabled: true
     source: "secret" # Possible values: `letsEncrypt` and `secret`
@@ -132,7 +133,7 @@ waldur:
   mastermindUrl: "http://waldur.example.com/"
   site:
     name: "Waldur"
-    logo: "icons/login_logo.png"
+    logo: "/etc/waldur/icons/login_logo.png"
     address: "Example address"
     email: "waldur@example.com"
     phone: "test phone"
@@ -155,6 +156,17 @@ waldur:
   disabledRoles:
     - customer_manager
     - customer_support
+  customRoleDescriptions:
+    CUSTOMER.OWNER: Organization owner
+    CUSTOMER.MANAGER: Service provider manager
+    CUSTOMER.SUPPORT: Organization support
+    PROJECT.ADMIN: Project administrator
+    PROJECT.MANAGER: Project manager
+    PROJECT.MEMBER: Project member
+    OFFERING.MANAGER: Offering manager
+    CALL.REVIEWER: Call reviewer
+    CALL.MANAGER: Call manager
+    PROPOSAL.MANAGER: Proposal manager
   authMethods:
     - LOCAL_SIGNIN
     - LDAP
@@ -297,7 +309,6 @@ waldur:
     faviconPath: "test/images/waldur-favicon.png"
     tosHtmlPath: "test/files/tos.html"
     brandColor: ""
-    brandLabelColor: ""
     heroImagePath: "" # keep the default one, because the image is too large (~541 KB)
     heroLinkLabel: ""
     heroLinkUrl: ""
@@ -379,8 +390,8 @@ waldur:
       - EDUGAIN
       - HAKA_TEST
       - HAKA_PROD
-  ssh_public_key_path: "test/ssh/id_rsa"
-  ssh_private_key_path: "test/ssh/id_rsa.pub"
+  ssh_public_key_path: ""
+  ssh_private_key_path: ""
   homeport:
     imageName: "opennode/waldur-homeport"
     matomoUrlBase: ""
@@ -405,11 +416,6 @@ waldur:
     azureClientSecret: ""
     azureScope: ""
 
-bootstrap:
-  enabled: true
-  script: "bootstrap.sh"
-  dir: "test/bootstrap"
-
 networkPolicy:
   enabled: true
 
@@ -429,7 +435,7 @@ externalDB:
   serviceName: "waldur-testing-postgres"
 
 postgresql:
-  enabled: false
+  enabled: true
   auth:
     username: "waldur"
     password: "waldur"
@@ -451,7 +457,7 @@ postgresql:
     enabled: true
 
 postgresqlha:
-  enabled: true
+  enabled: false
   postgresql:
     database: waldur
     username: waldur
