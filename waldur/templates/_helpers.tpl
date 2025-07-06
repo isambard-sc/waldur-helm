@@ -122,21 +122,6 @@ Set postgres user
 {{- end -}}
 
 {{/*
-Set rabbitmq URL
-*/}}
-{{- define "waldur.rabbitmq.rmqUrl" -}}
-{{- $rmqHost := "" -}}
-{{- if .Values.rabbitmq.enabled -}}
-{{- $rmqHost = list .Release.Name "rabbitmq" | join "-" -}}
-{{- else -}}
-{{- $rmqHost = .Values.rabbitmq.host -}}
-{{- end -}}
-{{- with .Values.rabbitmq -}}
-amqp://{{ .auth.username }}:{{ .auth.password }}@{{ $rmqHost }}:{{ default 5672 .customAMQPPort }}
-{{- end -}}
-{{- end -}}
-
-{{/*
 Set rabbitmq host
 */}}
 {{- define "waldur.rabbitmq.rmqHost" -}}
@@ -232,6 +217,30 @@ Add environment variables to configure database values and Sentry environment
       key: {{ include "waldur.postgresql.secret.passwordKey" . }}
   {{ end }}
 {{ end }}
+
+- name: EMAIL_USER
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.mail.existingSecret.name | default "waldur-secret" }}
+      key: {{ .Values.waldur.mail.existingSecret.userKey | default "MAIL_USER" }}
+
+- name: EMAIL_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.mail.existingSecret.name | default "waldur-secret"}}
+      key: {{ .Values.waldur.mail.existingSecret.passwordKey | default "MAIL_PASSWORD"}}
+
+- name: RABBITMQ_USER
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.rabbitmq.auth.existingSecret.name | default "waldur-secret"}}
+      key: {{ .Values.rabbitmq.auth.existingSecret.userKey | default "RABBITMQ_USER"}}
+
+- name: RABBITMQ_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.rabbitmq.auth.existingSecret.name | default "waldur-secret"}}
+      key: {{ .Values.rabbitmq.auth.existingSecret.passwordKey | default "RABBITMQ_PASSWORD"}}
 
 {{ if .Values.waldur.sentryDSN }}
 - name: SENTRY_DSN

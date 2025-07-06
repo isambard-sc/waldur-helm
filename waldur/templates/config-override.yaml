@@ -63,7 +63,11 @@ data:
         }
     }
 
-    CELERY_BROKER_URL = {{ include "waldur.rabbitmq.rmqUrl" . | quote }}
+    rmq_user = os.environ.get('RABBITMQ_USER')
+    rmq_password = os.environ.get('RABBITMQ_PASSWORD')
+    rmq_host = {{ include "waldur.rabbitmq.rmqHost" . | quote }}
+    rmq_port = {{ default 5672 .Values.customAMQPPort }}
+    CELERY_BROKER_URL = f'amqp://{rmq_user}:{rmq_password}@{rmq_host}:{rmq_port}'
 
     postgresql_host = os.environ.get('POSTGRESQL_HOST')
     postgresql_port = os.environ.get('POSTGRESQL_PORT')
@@ -77,15 +81,15 @@ data:
         "HOST": {{ include "waldur.rabbitmq.rmqHost" . | quote }},
         "MQTT_PORT": 1883,
         "STOMP_PORT": None,
-        "USER": {{ .Values.rabbitmq.auth.username | quote }},
-        "PASSWORD": {{ .Values.rabbitmq.auth.password | quote }},
+        "USER": rmq_user,
+        "PASSWORD": rmq_password,
         "MANAGEMENT_PORT": 15672,
     }
 
     EMAIL_HOST = '{{ .Values.waldur.mail.host }}'
     EMAIL_PORT = {{ .Values.waldur.mail.port | default 25 | int }}
-    EMAIL_HOST_USER = '{{ .Values.waldur.mail.username | default "" }}'
-    EMAIL_HOST_PASSWORD = '{{ .Values.waldur.mail.password | default "" }}'
+    EMAIL_HOST_USER = os.environ.get('EMAIL_USER')
+    EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASSWORD')
     EMAIL_USE_TLS = {{ .Values.waldur.mail.useTLS | default "False" | camelcase }}
     EMAIL_USE_SSL = {{ .Values.waldur.mail.useSSL | default "False" | camelcase }}
 
