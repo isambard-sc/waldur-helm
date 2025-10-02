@@ -1,9 +1,0 @@
-{{ if .Values.waldur.notifications }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: mastermind-notifications-config
-data:
-  notifications.json: |
-{{ toJson .Values.waldur.notifications | indent 4 }}
-{{ end }}
