@@ -90,7 +90,7 @@ data:
         {{ else }}
         "STOMP_PORT": None,
         {{ end }}
-        "USER": rmq_user,
+        "USER": rmq_username,
         "PASSWORD": rmq_password,
         "MANAGEMENT_PORT": 15672,
     }
