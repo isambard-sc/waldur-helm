@@ -230,17 +230,26 @@ Add environment variables to configure database values and Sentry environment
       name: {{ .Values.waldur.mail.existingSecret.name | default "waldur-secret"}}
       key: {{ .Values.waldur.mail.existingSecret.passwordKey | default "MAIL_PASSWORD"}}
 
-- name: RABBITMQ_USER
+- name: RABBITMQ_HOSTNAME
+  value: {{ include "waldur.rabbitmq.rmqHost" . | quote }}
+- name: RABBITMQ_USERNAME
+  {{ if and .Values.rabbitmq.secret.name .Values.rabbitmq.secret.usernameKey  }}
   valueFrom:
     secretKeyRef:
-      name: {{ .Values.rabbitmq.auth.existingSecret.name | default "waldur-secret"}}
-      key: {{ .Values.rabbitmq.auth.existingSecret.userKey | default "RABBITMQ_USER"}}
-
+      name: {{ .Values.rabbitmq.secret.name }}
+      key: {{ .Values.rabbitmq.secret.usernameKey }}
+  {{ else }}
+  value: {{ .Values.rabbitmq.auth.username }}
+  {{ end }}
 - name: RABBITMQ_PASSWORD
+  {{ if and .Values.rabbitmq.secret.name .Values.rabbitmq.secret.passwordKey  }}
   valueFrom:
     secretKeyRef:
-      name: {{ .Values.rabbitmq.auth.existingSecret.name | default "waldur-secret"}}
-      key: {{ .Values.rabbitmq.auth.existingSecret.passwordKey | default "RABBITMQ_PASSWORD"}}
+      name: {{ .Values.rabbitmq.secret.name }}
+      key: {{ .Values.rabbitmq.secret.passwordKey }}
+  {{ else }}
+  value: {{ .Values.rabbitmq.auth.password }}
+  {{ end }}
 
 {{ if .Values.waldur.sentryDSN }}
 - name: SENTRY_DSN

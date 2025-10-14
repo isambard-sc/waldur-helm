@@ -63,11 +63,12 @@ data:
         }
     }
 
-    rmq_user = os.environ.get('RABBITMQ_USER')
-    rmq_password = os.environ.get('RABBITMQ_PASSWORD')
-    rmq_host = {{ include "waldur.rabbitmq.rmqHost" . | quote }}
-    rmq_port = {{ default 5672 .Values.customAMQPPort }}
-    CELERY_BROKER_URL = f'amqp://{rmq_user}:{rmq_password}@{rmq_host}:{rmq_port}'
+    rabbitmq_host = os.environ.get('RABBITMQ_HOSTNAME')
+    rabbitmq_port = 5672
+    rabbitmq_username = os.environ.get('RABBITMQ_USERNAME')
+    rabbitmq_password = os.environ.get('RABBITMQ_PASSWORD')
+
+    CELERY_BROKER_URL = f"amqp://{rabbitmq_username}:{rabbitmq_password}@{rabbitmq_host}:{rabbitmq_port}"
 
     postgresql_host = os.environ.get('POSTGRESQL_HOST')
     postgresql_port = os.environ.get('POSTGRESQL_PORT')
@@ -238,6 +239,15 @@ data:
     WALDUR_CORE["SERVICE_ACCOUNT_URL"] = {{ .Values.waldur.serviceAccountApiIntegration.managementUrl | quote }}
     WALDUR_CORE["SERVICE_ACCOUNT_TOKEN_CLIENT_ID"] = {{ .Values.waldur.serviceAccountApiIntegration.tokenClientId | quote }}
     WALDUR_CORE["SERVICE_ACCOUNT_TOKEN_SECRET"] = {{ .Values.waldur.serviceAccountApiIntegration.tokenSecret | quote }}
+    {{ end }}
+
+    {{ if and (hasKey .Values.waldur "courseAccountApiIntegration") (.Values.waldur.courseAccountApiIntegration.enabled) }}
+    WALDUR_CORE["ENABLE_PROJECT_KIND_COURSE"] = True
+    WALDUR_CORE["COURSE_ACCOUNT_USE_API"] = True
+    WALDUR_CORE["COURSE_ACCOUNT_TOKEN_URL"] = {{ .Values.waldur.courseAccountApiIntegration.tokenUrl | quote }}
+    WALDUR_CORE["COURSE_ACCOUNT_URL"] = {{ .Values.waldur.courseAccountApiIntegration.managementUrl | quote }}
+    WALDUR_CORE["COURSE_ACCOUNT_TOKEN_CLIENT_ID"] = {{ .Values.waldur.courseAccountApiIntegration.tokenClientId | quote }}
+    WALDUR_CORE["COURSE_ACCOUNT_TOKEN_SECRET"] = {{ .Values.waldur.courseAccountApiIntegration.tokenSecret | quote }}
     {{ end }}
 
     {{ if has "protect_freeipa_user_details" .Values.waldur.features }}
