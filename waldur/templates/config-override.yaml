@@ -70,6 +70,11 @@ data:
 
     CELERY_BROKER_URL = f"amqp://{rabbitmq_username}:{rabbitmq_password}@{rabbitmq_host}:{rabbitmq_port}"
 
+    print(f"Using RabbitMQ broker at {CELERY_BROKER_URL}")
+    print(f"rabbitmq_host: {rabbitmq_host}")
+    print(f"rabbitmq_username: {rabbitmq_username}")
+    print(f"rabbitmq_password: {rabbitmq_password}")
+
     postgresql_host = os.environ.get('POSTGRESQL_HOST')
     postgresql_port = os.environ.get('POSTGRESQL_PORT')
     postgresql_user = os.environ.get('POSTGRESQL_USER')
