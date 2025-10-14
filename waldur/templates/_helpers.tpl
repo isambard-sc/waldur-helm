@@ -233,7 +233,7 @@ Add environment variables to configure database values and Sentry environment
 - name: RABBITMQ_HOSTNAME
   value: {{ include "waldur.rabbitmq.rmqHost" . | quote }}
 - name: RABBITMQ_USERNAME
-  {{ if .Values.rabbitmq.auth.existingSecret.name .Values.rabbitmq.auth.existingSecret.usernameKey  }}
+  {{ if .Values.rabbitmq.auth.existingSecret.name }}
   valueFrom:
     secretKeyRef:
       name: {{ .Values.rabbitmq.auth.existingSecret.name }}
@@ -242,7 +242,7 @@ Add environment variables to configure database values and Sentry environment
   value: {{ .Values.rabbitmq.auth.username }}
   {{ end }}
 - name: RABBITMQ_PASSWORD
-  {{ if and .Values.rabbitmq.auth.existingSecret.name .Values.rabbitmq.auth.existingSecret.passwordKey  }}
+  {{ if and .Values.rabbitmq.auth.existingSecret.name }}
   valueFrom:
     secretKeyRef:
       name: {{ .Values.rabbitmq.auth.existingSecret.name }}
