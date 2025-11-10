@@ -83,8 +83,8 @@ ingress:
     customMastermindSecretName: ""
     customHomeportSecretName: ""
     secretsDir: "tls"  # Enabled only if source == `secret`
-  whitelistSourceRange: '172.17.36.95/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.17.36.8/32,172.17.152.11/32,172.18.128.77/32,172.18.64.0/24'
-  whitelistSourceRangeAdmin: '172.17.36.95/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.18.64.0/24'
+  whitelistSourceRange: '172.17.36.95/32,172.18.128.82/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.17.36.8/32,172.17.152.11/32,172.18.128.77/32,172.18.64.0/24'
+  whitelistSourceRangeAdmin: '172.17.36.95/32,172.18.128.82/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.18.64.0/24'
 
 celery:
   worker:
@@ -288,6 +288,15 @@ waldur:
       projectKey: "WAL"
       useAutomaticRequestMapping: false
       legacy: true
+      customFieldMapping:
+        enabled: true
+        waldurBackendIdField: "customfield_10200"
+        impactField: "Impact"
+        organisationField: "Reporter organization"
+        projectField: "Waldur Project"
+        affectedResourceField: "Affected Resource"
+        reporterField: "Original Reporter"
+        templateField: "Issue Template"
     zammad:
       apiUrl: "https://zammad.example.com/api/"
       token: "3423412341234123"
@@ -372,6 +381,7 @@ waldur:
     managementUrl: "https://test.example.com/api/course-accounts"
     tokenClientId: "secret-id"
     tokenSecret: "token-secret"
+  projectEndDateRequired: false
   enableStrictCheckAcceptingInvitation: false
   # Measured in weeks number
   invitationDuration:
@@ -459,7 +469,7 @@ waldur:
     azureClientSecret: ""
     azureScope: ""
   rabbitmqEvents:
-    mqttEnabled: true
+    mqttEnabled: false
     stompEnabled: false
 
 networkPolicy:

@@ -104,7 +104,7 @@ ingress:
   className: "nginx"
   tls:
     enabled: false
-    source: "secret" # Possible values: `letsEncrypt` and `secret`
+    source: "secret" # Possible values: `letsEncrypt`, `secret` and `cluster` (works for OpenShift only)
     customMastermindSecretName: ""
     customHomeportSecretName: ""
     secretsDir: "tls"  # Enabled only if source == `secret`
@@ -128,7 +128,7 @@ hostAliases: []
 
 waldur:
   imageName: "opennode/waldur-mastermind"
-  imageTag: "7.8.4"
+  imageTag: "7.8.6"
   initdbEnabled: true
   initdbImageName: "library/postgres"
   pullPolicy: Always
@@ -304,6 +304,15 @@ waldur:
       projectKey: ""
       useAutomaticRequestMapping: true
       legacy: false
+      customFieldMapping:
+        enabled: false
+        waldurBackendIdField: "customfield_10200"
+        impactField: "Impact"
+        organisationField: "Reporter organization"
+        projectField: "Waldur Project"
+        affectedResourceField: "Affected Resource"
+        reporterField: "Original Reporter"
+        templateField: "Issue Template"
     zammad:
       apiUrl: ""
       token: ""
@@ -380,6 +389,7 @@ waldur:
     managementUrl: ""
     tokenClientId: ""
     tokenSecret: ""
+  projectEndDateRequired: false
   enableStrictCheckAcceptingInvitation: false
   # Measured in weeks number
   invitationDuration:
