@@ -63,7 +63,12 @@ data:
         }
     }
 
-    CELERY_BROKER_URL = {{ include "waldur.rabbitmq.rmqUrl" . | quote }}
+    rabbitmq_host = os.environ.get('RABBITMQ_HOSTNAME')
+    rabbitmq_port = 5672
+    rabbitmq_username = os.environ.get('RABBITMQ_USERNAME')
+    rabbitmq_password = os.environ.get('RABBITMQ_PASSWORD')
+
+    CELERY_BROKER_URL = f"amqp://{rabbitmq_username}:{rabbitmq_password}@{rabbitmq_host}:{rabbitmq_port}"
 
     postgresql_host = os.environ.get('POSTGRESQL_HOST')
     postgresql_port = os.environ.get('POSTGRESQL_PORT')
@@ -74,17 +79,25 @@ data:
 
     RABBITMQ = {
         "HOST": {{ include "waldur.rabbitmq.rmqHost" . | quote }},
+        {{ if .Values.waldur.rabbitmqEvents.mqttEnabled }}
         "MQTT_PORT": 1883,
+        {{ else }}
+        "MQTT_PORT": None,
+        {{ end }}
+        {{ if .Values.waldur.rabbitmqEvents.stompEnabled }}
         "STOMP_PORT": 61613,
-        "USER": {{ .Values.rabbitmq.auth.username | quote }},
-        "PASSWORD": {{ .Values.rabbitmq.auth.password | quote }},
+        {{ else }}
+        "STOMP_PORT": None,
+        {{ end }}
+        "USER": rabbitmq_username,
+        "PASSWORD": rabbitmq_password,
         "MANAGEMENT_PORT": 15672,
     }
 
     EMAIL_HOST = '{{ .Values.waldur.mail.host }}'
     EMAIL_PORT = {{ .Values.waldur.mail.port | default 25 | int }}
-    EMAIL_HOST_USER = '{{ .Values.waldur.mail.username | default "" }}'
-    EMAIL_HOST_PASSWORD = '{{ .Values.waldur.mail.password | default "" }}'
+    EMAIL_HOST_USER = os.environ.get('EMAIL_USER')
+    EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_PASSWORD')
     EMAIL_USE_TLS = {{ .Values.waldur.mail.useTLS | default "False" | camelcase }}
     EMAIL_USE_SSL = {{ .Values.waldur.mail.useSSL | default "False" | camelcase }}
 
@@ -219,6 +232,22 @@ data:
     WALDUR_CORE["INVITATION_WEBHOOK_TOKEN_SECRET"] = {{ default "" .Values.waldur.customInvitations.tokenSecret | quote }}
     {{ end }}
 
+    {{ if and (hasKey .Values.waldur "serviceAccountApiIntegration") (.Values.waldur.serviceAccountApiIntegration.enabled) }}
+    WALDUR_CORE["SERVICE_ACCOUNT_USE_API"] = True
+    WALDUR_CORE["SERVICE_ACCOUNT_TOKEN_URL"] = {{ .Values.waldur.serviceAccountApiIntegration.tokenUrl | quote }}
+    WALDUR_CORE["SERVICE_ACCOUNT_URL"] = {{ .Values.waldur.serviceAccountApiIntegration.managementUrl | quote }}
+    WALDUR_CORE["SERVICE_ACCOUNT_TOKEN_CLIENT_ID"] = {{ .Values.waldur.serviceAccountApiIntegration.tokenClientId | quote }}
+    WALDUR_CORE["SERVICE_ACCOUNT_TOKEN_SECRET"] = {{ .Values.waldur.serviceAccountApiIntegration.tokenSecret | quote }}
+    {{ end }}
+
+    {{ if and (hasKey .Values.waldur "courseAccountApiIntegration") (.Values.waldur.courseAccountApiIntegration.enabled) }}
+    WALDUR_CORE["ENABLE_PROJECT_KIND_COURSE"] = True
+    WALDUR_CORE["COURSE_ACCOUNT_USE_API"] = True
+    WALDUR_CORE["COURSE_ACCOUNT_TOKEN_URL"] = {{ .Values.waldur.courseAccountApiIntegration.tokenUrl | quote }}
+    WALDUR_CORE["COURSE_ACCOUNT_URL"] = {{ .Values.waldur.courseAccountApiIntegration.managementUrl | quote }}
+    WALDUR_CORE["COURSE_ACCOUNT_TOKEN_CLIENT_ID"] = {{ .Values.waldur.courseAccountApiIntegration.tokenClientId | quote }}
+    WALDUR_CORE["COURSE_ACCOUNT_TOKEN_SECRET"] = {{ .Values.waldur.courseAccountApiIntegration.tokenSecret | quote }}
+    {{ end }}
 
     {{ if has "protect_freeipa_user_details" .Values.waldur.features }}
     WALDUR_CORE['PROTECT_USER_DETAILS_FOR_REGISTRATION_METHODS'] = ['FREEIPA']
@@ -411,6 +440,9 @@ data:
         'LOCAL_IDP_PROTECTED_FIELDS': {{ .Values.waldur.localIdp.protectedFields | toJson }},
     })
 
+    {{ if .Values.waldur.overrideSubnetBlacklist }}
+    WALDUR_CORE['SUBNET_BLACKLIST'] = {{ .Values.waldur.overrideSubnetBlacklist | toJson }}
+    {{ end }}
 
     {{ if .Values.waldur.mastermindUrl }}
     WALDUR_CORE["MASTERMIND_URL"] = {{ .Values.waldur.mastermindUrl | quote }}

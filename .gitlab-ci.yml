@@ -114,6 +114,7 @@ Test release installation and readiness:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
         - waldur/**/*
+      when: never
   before_script:
     - echo 'PasswordAuthentication no' >> /etc/ssh/ssh_config
     - cat /etc/ssh/ssh_config
@@ -135,7 +136,7 @@ Test ArgoCD sync:
     - $SSH_COMMAND "argocd account get-user-info"
     - $SSH_COMMAND "argocd app list"
     - $SSH_COMMAND "argocd repo add https://code.opennodecloud.com/waldur/waldur-helm.git --username gitlab-ci-token --password $CI_JOB_TOKEN --upsert"
-    - $SSH_COMMAND "argocd app sync $APPLICATION_NAME --timeout 2400"
+    - $SSH_COMMAND "argocd app sync $APPLICATION_NAME --timeout 2400 --prune"
     - $SSH_COMMAND "argocd app wait $APPLICATION_NAME"
     - $SSH_COMMAND "argocd repo rm https://code.opennodecloud.com/waldur/waldur-helm.git"
 
@@ -145,27 +146,6 @@ Cleanup previous test deployment:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "schedule"'
-
-Upload docs:
-  image:
-    name: registry.hpc.ut.ee/mirror/alpine/git:v2.30.2
-    entrypoint: [""]
-  stage: deploy
-  interruptible: true
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "schedule"'
-  script:
-    - cd /tmp/
-    - git clone "https://gitlab-ci-token:$GITLAB_TOKEN@$CI_SERVER_HOST/waldur/waldur-docs.git"
-    - git config --global user.name "$GITLAB_USER_NAME"
-    - git config --global user.email "$GITLAB_USER_EMAIL"
-    - cd waldur-docs/
-    - cp -v $CI_PROJECT_DIR/README.md docs/admin-guide/deployment/helm/index.md
-    - cp -rv $CI_PROJECT_DIR/docs/ docs/admin-guide/deployment/helm/
-    - git add docs/admin-guide/deployment/helm/
-    - git commit -m 'Update Waldur Helm docs' || exit 0
-    - git branch new-configuration-guide
-    - git push --set-upstream origin new-configuration-guide:master
 
 Publish new chart version and update docs on github:
   image:
