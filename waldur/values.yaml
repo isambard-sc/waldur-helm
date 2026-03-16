@@ -593,6 +593,17 @@ stressTesting:
   enabled: false
   locustFilePath: "locust_task/locust_test.py"
 
+# Annotations added to all pod templates (api, worker, beat).
+# Useful for e.g. disabling OTel injection:
+#   instrumentation.opentelemetry.io/inject-python: "false"
+podAnnotations: {}
+
+# Extra environment variables injected into all pod templates (api, worker, beat).
+# Useful for e.g. disabling the OTel SDK or specific instrumentors:
+#   - name: OTEL_SDK_DISABLED
+#     value: "true"
+extraEnvVars: []
+
 global:
   imageRegistry: "docker.io"
   # TODO: remove after migration to a stable RabbitMQ and PostgreSQL images from bitnamilegacy repo

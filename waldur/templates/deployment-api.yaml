@@ -15,6 +15,10 @@ spec:
       labels:
         app: waldur-mastermind-api
         {{ include "waldur.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       {{ if .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -61,6 +65,9 @@ spec:
             - name: OPENPORTAL_CONFIG
               value: "/etc/waldur/openportal/config.toml"
             {{ end }}
+            {{- with .Values.extraEnvVars }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             {{ if .Values.hpa.api.enabled }}
             {{- toYaml .Values.hpa.api.resources | nindent 12 }}

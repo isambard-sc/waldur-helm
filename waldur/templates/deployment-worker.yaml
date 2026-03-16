@@ -16,6 +16,10 @@ spec:
       labels:
         app: waldur-mastermind-worker
         {{ include "waldur.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       {{ if .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -62,6 +66,9 @@ spec:
             - name: OPENPORTAL_CONFIG
               value: "/etc/waldur/openportal/config.toml"
             {{ end }}
+            {{- with .Values.extraEnvVars }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           resources:
             {{ if .Values.hpa.celery.enabled }}
             {{- toYaml .Values.hpa.celery.workerResources | nindent 12 }}
