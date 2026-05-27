@@ -233,22 +233,38 @@ Add environment variables to configure database values and Sentry environment
 - name: RABBITMQ_HOSTNAME
   value: {{ include "waldur.rabbitmq.rmqHost" . | quote }}
 - name: RABBITMQ_USERNAME
-  {{ if .Values.rabbitmq.auth.existingSecret.name }}
+  {{ if and .Values.rabbitmq.secret.name .Values.rabbitmq.secret.usernameKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.rabbitmq.secret.name }}
+      key: {{ .Values.rabbitmq.secret.usernameKey }}
+  {{ else if and (hasKey .Values.rabbitmq.auth "existingSecret") .Values.rabbitmq.auth.existingSecret.name }}
   valueFrom:
     secretKeyRef:
       name: {{ .Values.rabbitmq.auth.existingSecret.name }}
       key: {{ .Values.rabbitmq.auth.existingSecret.usernameKey }}
   {{ else }}
-  value: {{ .Values.rabbitmq.auth.username }}
+  valueFrom:
+    secretKeyRef:
+      name: "waldur-secret"
+      key: "RABBITMQ_USER"
   {{ end }}
 - name: RABBITMQ_PASSWORD
-  {{ if and .Values.rabbitmq.auth.existingSecret.name }}
+  {{ if and .Values.rabbitmq.secret.name .Values.rabbitmq.secret.passwordKey }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.rabbitmq.secret.name }}
+      key: {{ .Values.rabbitmq.secret.passwordKey }}
+  {{ else if and (hasKey .Values.rabbitmq.auth "existingSecret") .Values.rabbitmq.auth.existingSecret.name }}
   valueFrom:
     secretKeyRef:
       name: {{ .Values.rabbitmq.auth.existingSecret.name }}
       key: {{ .Values.rabbitmq.auth.existingSecret.passwordKey }}
   {{ else }}
-  value: {{ .Values.rabbitmq.auth.password }}
+  valueFrom:
+    secretKeyRef:
+      name: "waldur-secret"
+      key: "RABBITMQ_PASSWORD"
   {{ end }}
 
 {{ if .Values.waldur.sentryDSN }}
