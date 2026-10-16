@@ -359,3 +359,16 @@ Add environment variables to configure database values and Sentry environment
   value: {{ .Values.proxy.noProxy | quote }}
 {{ end }}
 {{- end -}}
+
+{{ if .Values.waldur.formbricks.enabled }}
+- name: FORMBRICKS_WEBHOOK_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.formbricks.existingSecret.name }}
+      key: {{ .Values.waldur.formbricks.existingSecret.webhookSecretKey | default "FORMBRICKS_WEBHOOK_SECRET" }}
+- name: FORMBRICKS_API_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.formbricks.existingSecret.name }}
+      key: {{ .Values.waldur.formbricks.existingSecret.apiKeyKey | default "FORMBRICKS_API_KEY" }}
+{{ end }}

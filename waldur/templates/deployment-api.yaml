@@ -75,6 +75,11 @@ spec:
             {{- toYaml .Values.apiResources | nindent 12 }}
             {{ end }}
           volumeMounts:
+            {{ if .Values.waldur.formbricks.enabled }}
+            - name: formbricks-flows
+              mountPath: /etc/waldur/formbricks-flows.yaml
+              subPath: formbricks-flows.yaml
+            {{ end }}
             - name: api-override
               mountPath: /etc/waldur/override.conf.py
               subPath: override.conf.py
@@ -128,6 +133,11 @@ spec:
               mountPath: /etc/waldur/ssh-signing-key
               readOnly: true
       volumes:
+      {{ if .Values.waldur.formbricks.enabled }}
+      - name: formbricks-flows
+        configMap:
+          name: formbricks-flows-config
+      {{ end }}
       - name: api-override
         configMap:
           name: api-override-config

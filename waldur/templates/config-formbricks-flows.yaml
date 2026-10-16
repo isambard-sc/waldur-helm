@@ -1,0 +1,10 @@
+{{ if .Values.waldur.formbricks.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: formbricks-flows-config
+data:
+  formbricks-flows.yaml: |
+{{ .Values.waldur.formbricks.flows | toYaml | indent 4 }}
+{{ end }}
+

@@ -470,6 +470,16 @@ data:
     WALDUR_KEYCLOAK['PASSWORD'] = {{ .Values.waldur.keycloak_sync.password | quote }}
     {{ end }}
 
+    {{ if .Values.waldur.formbricks.enabled }}
+    WALDUR_PROPOSAL.update({
+        'FORMBRICKS_BASE_URL': '{{ .Values.waldur.formbricks.baseUrl }}',
+        'FORMBRICKS_MANAGEMENT_API_URL': '{{ .Values.waldur.formbricks.managementApiUrl }}',
+        'FORMBRICKS_WEBHOOK_SECRET': os.environ.get('FORMBRICKS_WEBHOOK_SECRET'),
+        'FORMBRICKS_API_KEY': os.environ.get('FORMBRICKS_API_KEY'),
+        'FRONTEND_FLOW_COMPLETE_URL_TEMPLATE': '{{ .Values.waldur.formbricks.frontendFlowCompleteUrlTemplate }}',
+    })
+    {{ end }}
+
     # Added to enable SSH CA support
     SSH_PRIVATE_SIGNING_KEY_PATH = "/etc/waldur/ssh-signing-key/private"
 
