@@ -23,24 +23,28 @@ spec:
       {{ end }}
       {{ if .Values.hostAliases }}
       hostAliases:
-        {{ toYaml .Values.hostaliases | nindent 8 }}
+        {{ toYaml .Values.hostAliases | nindent 8 }}
       {{ end }}
       containers:
       - name: waldur-metrics-exporter
-        image: {{ .Values.global.imageRegistry }}/opennode/waldur-prometheus-exporter:{{ .Values.waldur.imageTag }}
-        imagePullPolicy: {{ .Values.waldur.pullPolicy }}
+        {{- if .Values.waldur.metricsExporter.imageDigest }}
+        image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.metricsExporter.imageName }}@{{ .Values.waldur.metricsExporter.imageDigest }}
+        {{- else }}
+        image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.metricsExporter.imageName }}:{{ .Values.waldur.imageTag }}
+        {{- end }}
+        imagePullPolicy: {{ include "waldur.imagePullPolicy" (dict "tag" .Values.waldur.imageTag "Values" .Values) }}
         livenessProbe:
           httpGet:
             port: 8080
-            path: /metrics/
+            path: /healthz
           initialDelaySeconds: 3
-          periodSeconds: 3
+          periodSeconds: 10
         readinessProbe:
           httpGet:
             port: 8080
-            path: /metrics/
+            path: /ready
           initialDelaySeconds: 3
-          periodSeconds: 3
+          periodSeconds: 10
         ports:
           - name: http
             containerPort: 8080
@@ -48,19 +52,26 @@ spec:
         env:
           - name: WALDUR_API_URL
             value: "http://waldur-mastermind-api:80/api/"
-          {{ if .Values.waldur.supportTokenExistingSecret.name }}
+          {{- if .Values.waldur.supportTokenExistingSecret.name }}
           - name: WALDUR_API_TOKEN
             valueFrom:
               secretKeyRef:
                 name: {{ .Values.waldur.supportTokenExistingSecret.name }}
                 key: {{ .Values.waldur.supportTokenExistingSecret.key }}
-          {{ else if .Values.waldur.supportToken }}
+          {{- else if .Values.waldur.supportToken }}
           - name: WALDUR_API_TOKEN
             valueFrom:
               secretKeyRef:
                 name: waldur-secret
                 key: WALDUR_SUPPORT_API_TOKEN
-          {{ end }}
+          {{- end }}
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 500m
+            memory: 256Mi
         {{- with .Values.nodeSelector }}
         nodeSelector:
           {{- toYaml . | nindent 8 }}

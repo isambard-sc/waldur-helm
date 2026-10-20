@@ -13,9 +13,13 @@ fullnameOverride: ""
 
 apiScheme: "http"
 homeportScheme: "http"
+
 apiHostname: waldur.local
+localApiHostname: ""
 apiExtraHosts: []
+
 homeportHostname: waldur.local
+localHomeportHostname: ""
 homeportExtraHosts: []
 
 affinity: {}
@@ -66,10 +70,10 @@ cronjobResources:
   waldur:
     requests:
       cpu: 100m
-      memory: 256Mi
+      memory: 512Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
   postgres:
     requests:
       cpu: 200m
@@ -77,6 +81,11 @@ cronjobResources:
     limits:
       cpu: 1000m
       memory: 1Gi
+
+waldurCleanupCronjob:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800 # Marked as failed after 30 minutes
+  ttlSecondsAfterFinished: 86400 # Deleted after 24 hours
 
 hpa:
   api:
@@ -100,20 +109,133 @@ nodeSelector: {}
 tolerations: []
 
 ingress:
-  # Supported values: nginx, haproxy and openshift-default
+  enabled: true
+  # Supported values: nginx, haproxy, openshift-default and traefik
   className: "nginx"
   tls:
     enabled: false
     source: "secret" # Possible values: `letsEncrypt`, `secret` and `cluster` (works for OpenShift only)
+    clusterIssuerName: "letsencrypt-prod-issuer" # ClusterIssuer name for cert-manager (used when source == `letsEncrypt`), default: "letsencrypt-prod-issuer"
+    createClusterIssuer: false # Set to true only if you have cluster-admin permissions to create ClusterIssuer resources
     customMastermindSecretName: ""
     customHomeportSecretName: ""
-    secretsDir: "tls"  # Enabled only if source == `secret`
-  whitelistSourceRange: '' # E.g. '192.168.22.0/24'
-  whitelistSourceRangeAdmin: ''
+    secretsDir: "tls" # Enabled only if source == `secret`
+  proxyBufferSize: "8k" # Nginx proxy buffer size for upstream response headers. Increase if you get 502 errors due to long pagination Link headers.
+  whitelistSourceRange: "" # E.g. '192.168.22.0/24'
+  whitelistSourceRangeAdmin: ""
+  # Extra annotations merged onto every rendered Ingress object (api, api-admin,
+  # homeport, rmq-ws, uvk-everypay). Useful for cross-cutting concerns that the
+  # chart does not template natively — for example, controlling DNS TTL via
+  # external-dns. Values must be strings (YAML annotation requirement).
+  # Example:
+  #   annotations:
+  #     external-dns.alpha.kubernetes.io/ttl: "60"
+  #     external-dns.alpha.kubernetes.io/hostname: "api.example.com"
+  annotations: {}
+
+# Gateway API (HTTPRoute/Gateway) support, alongside -- not instead of -- ingress
+# above. Both can be enabled at once. See docs/gateway-api.md for the migration
+# guide, recommended implementations, and the extraPolicies examples referenced below.
+gatewayAPI:
+  enabled: false
+  # GatewayClass implementation, e.g. "envoy-gateway", "nginx", "istio".
+  # Only consulted when createGateway is true.
+  gatewayClassName: ""
+  # References to an existing Gateway (or Gateways) that the chart's HTTPRoutes
+  # attach to. Ignored when createGateway is true. Required (non-empty) otherwise.
+  # Example:
+  #   parentRefs:
+  #     - name: my-gateway
+  parentRefs: []
+  # Set to true to have the chart create and manage its own Gateway resource
+  # (templates/gateway.yaml) instead of attaching to one that already exists.
+  createGateway: false
+  # Listener list for the chart-managed Gateway (only used when createGateway is
+  # true). Empty renders a single plain HTTP listener named "http" on port 80 --
+  # enough to route unencrypted traffic. For HTTPS, supply your own listeners
+  # here (see docs/gateway-api.md for a worked example with per-hostname TLS
+  # certificateRefs); keep one listener named "http" if you also want the
+  # automatic HTTP->HTTPS redirect route (rendered when tls.enabled is true).
+  # Templated with `tpl`, so entries may reference .Values.
+  listeners: []
+  tls:
+    enabled: false
+    source: "secret" # Possible values: `letsEncrypt` and `secret`
+    clusterIssuerName: "letsencrypt-prod-issuer" # cert-manager ClusterIssuer, set on the Gateway (only used when createGateway is true)
+    createClusterIssuer: false
+    customMastermindSecretName: ""
+    customHomeportSecretName: ""
+  # Extra annotations merged onto every rendered HTTPRoute/Gateway object.
+  annotations: {}
+  # Raw manifests for the implementation-specific policies Gateway API has no
+  # standard resource for -- CORS, IP allow-listing, proxy body/buffer size.
+  # Each entry is a full YAML document (rendered as-is, separated by `---`) and
+  # is passed through `tpl`, so it may reference .Values (e.g.
+  # .Values.ingress.whitelistSourceRange, already defined above, to keep one
+  # source of truth for both the ingress and Gateway API paths).
+  # See docs/gateway-api.md for recommended Envoy Gateway / NGINX Gateway Fabric
+  # examples (SecurityPolicy for CORS/IP allow-list, Client/BackendTrafficPolicy
+  # for proxy tuning).
+  extraPolicies: []
 
 celery:
   worker:
     enabled: true
+  resultDatabase: "celery_results" # Database name for Celery results, default: "celery_results"
+  concurrency: 10  # CELERYD_CONCURRENCY (number of worker child processes per pod)
+  maxMemoryPerChild: ""  # CELERY_WORKER_MAX_MEMORY_PER_CHILD (KB): recycle a child once it exceeds this; empty/0 disables
+
+# Gunicorn process tuning for the mastermind API container.
+# Each non-empty value is appended to GUNICORN_CMD_ARGS, which gunicorn reads at startup.
+# Leave fields empty to keep the gunicorn.conf.py defaults baked into the image.
+gunicorn:
+  preload: ""              # GUNICORN_PRELOAD; image default enables preload (workers share imports copy-on-write). Set "false" to disable.
+  timeout: ""              # --timeout (seconds); default 30
+  gracefulTimeout: ""      # --graceful-timeout (seconds)
+  workers: ""              # --workers; gunicorn.conf.py default is 4
+  keepalive: ""            # --keep-alive (seconds); default 2
+  maxRequests: ""          # --max-requests (recycle worker after N requests; 0 disables)
+  maxRequestsJitter: ""    # --max-requests-jitter
+  extraArgs: ""            # raw passthrough, appended verbatim
+
+# Per-deployment extension hooks (api, worker, beat, homeport).
+# Defaults are empty so the rendered output is identical to the baseline chart.
+# All keys follow the Bitnami common-chart vocabulary.
+api:
+  extraEnvVars: []         # list of EnvVar (name/value or name/valueFrom)
+  extraEnvVarsCM: ""       # single ConfigMap name (rendered as envFrom.configMapRef)
+  extraEnvVarsSecret: ""   # single Secret name    (rendered as envFrom.secretRef)
+  extraVolumes: []         # list of Volume appended to the pod spec
+  extraVolumeMounts: []    # list of VolumeMount appended to the container
+  podAnnotations: {}
+  podLabels: {}
+
+worker:
+  extraEnvVars: []
+  extraEnvVarsCM: ""
+  extraEnvVarsSecret: ""
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  podLabels: {}
+
+beat:
+  extraEnvVars: []
+  extraEnvVarsCM: ""
+  extraEnvVarsSecret: ""
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  podLabels: {}
+
+homeport:
+  extraEnvVars: []
+  extraEnvVarsCM: ""
+  extraEnvVarsSecret: ""
+  extraVolumes: []
+  extraVolumeMounts: []
+  podAnnotations: {}
+  podLabels: {}
 
 proxy:
   httpsProxy: ""
@@ -128,12 +250,50 @@ hostAliases: []
 
 waldur:
   imageName: "opennode/waldur-mastermind"
-  imageTag: "7.8.6"
+  imageDigest: ""  # Optional: if set, uses the unique docker image hash, priority over tag
+  imageTag: "8.1.3-rc.21"
   initdbEnabled: true
+  # How long the whitelabeling hook waits for the schema before giving up, in
+  # seconds. It cannot start until migrations are done -- they run in the beat
+  # pod's initContainer, which helm does not sequence this hook behind -- so on
+  # a first install this has to cover the entire migration run from an empty
+  # database, which is the slowest thing the chart does.
+  #
+  # 45 minutes is deliberately generous. The cost of overshooting is that a
+  # genuinely stuck install takes longer to report failure; the cost of
+  # undershooting is a failed hook on a slow or contended cluster, which is the
+  # exact failure this wait exists to prevent. A from-empty migration run
+  # measured 834s on a small kind node, so this is roughly three times the
+  # observed need. The hook fails with the reason rather than hanging forever.
+  initdbWaitTimeout: 2700
   initdbImageName: "library/postgres"
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
   secretKey: "SecretKeyChangeMe"
   secretKeyExistingSecret:
+    name: ""
+    key: ""
+  # Fernet key for encrypting secret DB columns at rest: resource API keys,
+  # service settings credentials (password, token, and the credential values
+  # inside options), and offering secret options.
+  # Optional, but strongly recommended in production: when unset, the key is
+  # derived from secretKey and a warning is logged, which means every backend
+  # credential in the deployment is protected by a value that lives in plaintext
+  # in this file. Setting a dedicated key restores the separation, so leaking
+  # Django settings does not by itself unlock encrypted fields. Generate with:
+  # python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+  # Back it up separately from the database: a dump without the key is
+  # unreadable for those columns, and losing the key loses the data.
+  fieldEncryptionKey: ""
+  fieldEncryptionKeyExistingSecret:
+    name: ""
+    key: ""
+  # Previous keys, kept decryptable while fieldEncryptionKey is rotated: promote
+  # a new key, move the old one here, then run "waldur reencrypt_fields" and drop
+  # it once that reports every row rotated. Waiting for rows to be re-saved on
+  # their own does not work — a value is only rewritten when something happens to
+  # rewrite it, so there is no point at which the old key becomes safe to drop.
+  fieldEncryptionKeyFallbacks: []
+  fieldEncryptionKeyFallbacksExistingSecret:
     name: ""
     key: ""
   supportToken: ""
@@ -145,7 +305,20 @@ waldur:
     name: ""
     key: ""
   debug: false
+  # Browser web shell for staff: `waldur shell` in a browser tab, opened from
+  # the homeport user menu. For development and demo deployments only: the
+  # chart refuses to render it unless waldur.debug is true.
+  webShell:
+    enabled: false
+    # Public URL of the web shell page. Defaults to
+    # <apiScheme>://<apiHostname>/webshell/, where the chart routes it.
+    url: ""
+    resources: {}
   mail:
+    existingSecret:
+      name: ""
+      userKey: "MAIL_USER"
+      passwordKey: "MAIL_PASSWORD"
     host: ""
     port: ""
     username: ""
@@ -157,7 +330,94 @@ waldur:
     replyTo: ""
   notificationSubject: ""
   timeZone: "UTC"
+  # Row cap on the "waldur_cache" database cache table. Django's own default is
+  # 300, which is far too small here: that one table holds the brute-force login
+  # lockout counters, the blocked-user event dedup keys and the whole DRF
+  # throttle history, so on a busy deployment those get culled long before they
+  # expire and the limits they implement quietly stop applying.
+  # On overflow Django deletes a third of the table, so this is a ceiling rather
+  # than a steady-state size. Raise it if the deployment has many concurrent
+  # users. There is no "unlimited" setting - 0 makes Django cull on every write.
+  cacheMaxEntries: 100000
+  # Native passkey (FIDO2/WebAuthn) support. Inert unless PASSKEY_SIGNIN or
+  # PASSKEY_MFA is also present in waldur.authMethods above.
+  #
+  # The defaults derive everything from homeportHostname / homeportScheme /
+  # homeportExtraHosts, so a standard deployment needs to set nothing here.
+  passkey:
+    # WebAuthn Relying Party ID: the bare registrable domain credentials are
+    # bound to, with no scheme, port or path. Empty derives it from
+    # homeportHostname.
+    #
+    # CHANGING THIS ORPHANS EVERY REGISTERED CREDENTIAL. A passkey is bound to
+    # the RP ID it was created under; after a change the browser will not
+    # offer it and every user must enrol again. Waldur logs a startup warning
+    # counting affected credentials, but it cannot undo the change.
+    #
+    # Set it explicitly to a shared parent domain if the portal is served from
+    # several subdomains, e.g. "example.com" for both "waldur.example.com" and
+    # "portal.example.com". A single RP ID cannot span two different
+    # registrable domains; if homeportExtraHosts contains one, startup fails
+    # with waldur.passkeys.E006 and the extra host must be dropped from
+    # allowedOrigins below.
+    rpId: ""
+    # Human-readable name the authenticator shows during enrolment. Empty
+    # falls back to the site name.
+    rpName: ""
+    # Full origins the portal is served from. Empty derives them from
+    # homeportScheme + homeportHostname + homeportExtraHosts.
+    #
+    # Note homeportScheme defaults to "http": browsers expose WebAuthn only in
+    # a secure context, so anything other than localhost must be served over
+    # HTTPS or startup fails with waldur.passkeys.E005.
+    allowedOrigins: []
+    # Require staff and support accounts to hold a passkey and to have
+    # satisfied it for the current session. Closes the paths that otherwise
+    # yield a privileged session without one: reading another user's API
+    # token, impersonation, the Django admin, and minting a personal access
+    # token.
+    #
+    # ENABLING THIS LOGS EVERY STAFF MEMBER OUT. Tokens issued before the
+    # switch were created without a passkey, so leaving them in place would
+    # mean the setting changed nothing until each expired. Run
+    # "waldur revoke_unverified_staff_tokens" as part of the rollout.
+    #
+    # Staff without a passkey are not locked out: they can still sign in with
+    # a password and are held at an enrollment page until they add one. The
+    # Django admin gains a passkey step of its own rather than being closed.
+    #
+    # Inert unless a passkey method is present in authMethods above — without
+    # one there would be no way to comply.
+    enforcedForStaff: false
+  # Daily anonymous usage report to telemetry.waldur.com (deployment type,
+  # user and offering counts, offering types, version, helpdesk backend,
+  # installation date).
+  # Enabled by default; admins can also switch it off under
+  # Administration -> Settings -> Features. Setting this to false disables
+  # it at deploy time, before the first report, and overrides the admin
+  # toggle -- use it for air-gapped or contractually restricted sites.
+  telemetry:
+    enabled: true
   features: []
+  # Escape hatch for feature flags (waldur_core.core.models.Feature rows) that
+  # aren't covered by the curated toggles in `features` above. Keys are dotted
+  # "section.key" names as used by the `load_features` management command
+  # (e.g. "marketplace.conceal_offering_pricing_tab_in_public_view": true).
+  # Applied on every pod start, alongside the curated list, so it also lets
+  # you override a value the chart otherwise hardcodes (e.g.
+  # "project.estimated_cost": false).
+  featureFlags: {}
+  # Escape hatch for admin-configurable runtime settings that aren't covered
+  # by a dedicated value elsewhere in this file (waldur.support,
+  # waldur.marketplace etc). Keys are the setting names as defined in
+  # waldur-mastermind's waldur_core/server/constance_settings.py, e.g.:
+  #   settingsOverrides:
+  #     SCIM_INBOUND_ENABLED: true
+  #     MARKETPLACE_LANDING_PAGE: "Catalog"
+  # Applied once via the init-whitelabeling post-install/post-upgrade hook,
+  # like the dedicated settings above — it overwrites any value set through
+  # the admin UI on every `helm upgrade`.
+  settingsOverrides: {}
   currencyName: "EUR"
   mastermindUrl: ""
   site:
@@ -189,9 +449,40 @@ waldur:
     - proposal_manager
   customRoleDescriptions: {}
   customRolePermissions: {}
+  # Usually brand-new roles, not among the built-in ones above. Each entry
+  # needs "role" (a dotted SCOPE.NAME you choose), "scope" (one of the
+  # TYPE_MAP keys in waldur-mastermind's waldur_core/permissions/enums.py,
+  # e.g. "customer" or "project") and "permissions" (a full list, not an
+  # add/drop delta — a misspelled permission name is silently dropped, not
+  # rejected, since it isn't validated against PermissionEnum).
+  # "description" and "is_active" are optional. Requires a waldur-mastermind
+  # image whose initdb step loads custom-roles.yaml (8.1.3-rc.11+) — an
+  # is_active: false entry additionally requires the fix from
+  # waldur/waldur-mastermind!6317.
+  #
+  # Reusing a built-in role's name (e.g. CUSTOMER.OWNER) here is also valid:
+  # it fully replaces that role's permission set rather than adding to it,
+  # since it's imported right after permissions.yaml. See "Custom roles" in
+  # docs/configuration-overrides.md for the tradeoffs of doing that.
+  #
+  # Removing an entry does not delete or deactivate the role — a role
+  # loaded this way is a system role and the API won't delete it. Set
+  # is_active: false on the entry instead.
+  #
+  # customRoles:
+  #   - role: CUSTOMER.AUDITOR
+  #     scope: customer
+  #     description: "Read-only auditor"
+  #     permissions:
+  #       - CUSTOMER.LIST_USERS
+  #       - PROJECT.LIST
+  customRoles: []
   authMethods:
     - LOCAL_SIGNIN
   socialAuthMethods: []
+  socialAuthMethodsExistingSecret:
+    name: ""
+    key: "auth.yaml"
   localIdp:
     name: ""
     label: ""
@@ -231,11 +522,11 @@ waldur:
     admins: ""
     support: ""
   freeipa:
-    hostname: ""
-    password: ""
-    passwordExistingSecret:
+    existingSecret:
       name: ""
       key: ""
+    hostname: ""
+    password: ""
     username: ""
     verifySSL: ""
     groupnamePrefix: ""
@@ -271,6 +562,7 @@ waldur:
     bankAccount: ""
     vatCode: ""
     paymentInterval: ""
+    finalizationGracePeriodHours: 0
   invoice_reporting:
     enabled: false
     email: ""
@@ -282,10 +574,6 @@ waldur:
       fund: ""
       eeluks: ""
       kuluuksus: ""
-  slurm:
-    customerPrefix: ""
-    projectPrefix: ""
-    allocationPrefix: ""
   openportal:
     existingSecret:
       name: ""
@@ -333,16 +621,26 @@ waldur:
       verifySSL: True
   marketplace:
     notify_staff: false
+    # ISO 3166-1 alpha-2 codes offered in the organization creation dialog,
+    # e.g. [EE, FI, US, JP]. Left empty, the setting is not managed by the chart
+    # and whatever is configured in the admin UI is preserved.
+    countries: []
     script:
       enabled: false
       dockerImages: {}
       kubeconfigPath: "k8s/kubeconfig"
       kubeconfig: ""
+      kubeconfigSecret:
+        name: ""
+        key: ""
       k8sNamespace: "default"
       jobTimeout: 1800
   pid_datacite:
     repository_id: ""
     password: ""
+    passwordSecret:
+      name: ""
+      key: ""
     prefix: ""
     url: ""
     publisher: ""
@@ -398,7 +696,7 @@ waldur:
   mastermindTemplating:
     mastermindTemplatesPath: "mastermind_templates/mastermind-templates.yaml"
     mastermindTemplates: {}
-  notifications: []
+  notifications: {}
   saml2:
     dir: "waldur_saml2"
     federations: []
@@ -408,9 +706,12 @@ waldur:
   ssh_private_key: ""
   homeport:
     imageName: "opennode/waldur-homeport"
+    imageTag: ""  # Optional: if empty, waldur.imageTag is used
+    imageDigest: ""  # Optional: if set, uses unique docker image hash, priority over tag
     matomoUrlBase: ""
     matomoSiteId: ""
     customSentryURL: ""
+    inferencePlaygroundURL: ""
     userMandatoryFields: {}
     userRegistrationHiddenFields: {}
     docsLink: "https://docs.waldur.com"
@@ -418,6 +719,8 @@ waldur:
   metricsExporter:
     enabled: false
     includeAnnotations: true
+    imageName: "opennode/waldur-prometheus-exporter"
+    imageDigest: ""  # Optional: if set, uses unique docker image hash, priority over tag
   uvkEverypay:
     existingSecret:
       name:
@@ -426,7 +729,8 @@ waldur:
       azureClientIDKey: ""
       azureClientSecretKey: ""
     enabled: false
-    imageTag: latest
+    imageTag: "latest"
+    imageDigest: ""  # Optional: if set, uses digest instead of tag, priority over tag
     uvkServer: "https://uvk-test.ut.ee/client/a74/server.php?format=JSON&action=uvk__"
     everypayGateway: "https://igw-demo.every-pay.com/api/v4"
     everypayUsername: ""
@@ -436,7 +740,6 @@ waldur:
     azureClientSecret: ""
     azureScope: ""
   rabbitmqEvents:
-    mqttEnabled: false
     stompEnabled: false
 
 networkPolicy:
@@ -446,6 +749,9 @@ readonlyDB:
   enabled: false
   username: ""
   password: ""
+  passwordExistingSecret:
+    name: ""
+    key: "READONLY_DB_PASSWORD"
 
 readonlyDBReplica:
   enabled: false
@@ -453,53 +759,51 @@ readonlyDBReplica:
 
 externalDB:
   enabled: false
-  flavor: "zalando"
   secretName: "waldur.waldur.credentials.postgresql.acid.zalan.do"
   serviceName: "waldur-postgres"
+  database: ""
+  username: ""
+  # Set to "true" when the external Postgres sits behind a connection pooler
+  # running in transaction-pooling mode (e.g. the Zalando Postgres Operator's
+  # built-in PgBouncer sidecar, enableConnectionPooler: true). Named
+  # server-side cursors opened by Django's QuerySet.iterator() and by
+  # reversion's serialization can be routed to a different backend between
+  # DECLARE and FETCH/CLOSE under transaction pooling, raising
+  # psycopg.errors.InvalidCursorName. Set it yourself when fronting the
+  # database with any transaction-pooling proxy -- nothing forces it on now
+  # that the pgpool-based postgresql-ha subchart is gone.
+  disableServerSideCursors: "false"
+  # Key holding the password inside externalDB.secretName. Both
+  # CloudNativePG's <cluster>-app secret and Zalando's
+  # *.credentials.postgresql.acid.zalan.do secret use "password".
+  passwordKey: "password"
 
 postgresql:
+  # Bundled PostgreSQL for dev/test installs (CloudPirates chart, official
+  # docker.io/postgres image). Production should use externalDB with an
+  # operator-managed cluster -- see docs/postgres-operator.md.
   enabled: false
   auth:
     username: "waldur"
     password: "waldur"
     database: "waldur"
-  # The values are in use only if postgresql.enabled = true
-  primary:
-    persistence:
-      size: "10Gi"
-    resources:
-      requests:
-        memory: "1024Mi"
-        cpu: "500m"
-      limits:
-        memory: "2048Mi"
-        cpu: "1000m"
+  # The values below are in use only if postgresql.enabled = true
   image:
-    repository: bitnamilegacy/postgresql
-    tag: "16.4.0-debian-12-r19"
-  metrics:
-    enabled: false
-    image:
-      registry: "docker.io"
-      repository: bitnamilegacy/postgres-exporter
-      tag: 0.17.1-debian-12-r14
+    # Pinned to 17 to match waldur.postgresql.version in _helpers.tpl, which
+    # selects the client image used by the initdb/backup containers. Move both
+    # together or pg_dump/psql will refuse on a server-version mismatch.
+    tag: "17.6"
+  persistence:
+    enabled: true
+    size: "10Gi"
+  resources:
+    requests:
+      memory: "1024Mi"
+      cpu: "500m"
+    limits:
+      memory: "2048Mi"
+      cpu: "1000m"
 
-postgresqlha:
-  enabled: false
-  postgresql:
-    database: waldur
-    username: waldur
-    password: waldur
-    postgresPassword: postgres
-    repmgrPassword: repmgr
-    replicaCount: 3
-    image:
-      repository: bitnamilegacy/postgresql-repmgr
-      tag: "16.4.0-debian-12-r26"
-  pgpool:
-    image:
-      repository: bitnamilegacy/pgpool
-      tag: "4.6.2-debian-12-r7"
 
 postgresBackup:
   enabled: false
@@ -509,7 +813,11 @@ postgresBackup:
   image: opennode/postgres-minio:0.1.0
   name: "waldur"
 
-minio:
+# S3-compatible destination for the optional postgresBackup CronJobs.
+# Any S3 endpoint works -- the jobs use the `mc` client, so MinIO, AWS S3,
+# Ceph RGW and friends are all fine. Only consulted when
+# postgresBackup.enabled is true.
+backupStorage:
   accessKey: ""
   secretKey: ""
   bucketName: data
@@ -521,13 +829,62 @@ rabbitmq:
   auth:
     username: "waldur"
     password: "waldur"
-  # The values are in use only if rabbitmq.enabled = true
+  # The values below are in use only if rabbitmq.enabled = true
   image:
-    registry: "docker.io"
-    repository: "bitnamilegacy/rabbitmq"
-    tag: "4.1.3-debian-12-r1"
+    tag: "4.3.5-management"
+  # Keep this at 1 unless you also set `peerDiscoveryK8sPlugin.enabled: true`.
+  # The subchart does not cluster on its own: raising replicaCount without peer
+  # discovery deploys that many INDEPENDENT brokers behind one Service, which
+  # splits queues across unrelated nodes and crash-loops the Celery worker
+  # (its probes ping a random node). See docs/rabbitmq.md and #14.
   replicaCount: 1
-  extraPlugins: "rabbitmq_auth_backend_ldap rabbitmq_mqtt rabbitmq_web_mqtt rabbitmq_management rabbitmq_web_stomp rabbitmq_stomp"
+  # The chart derives nothing from plugin names, so the ports below must be
+  # declared explicitly. 61613/15674 are what config-override.yaml and
+  # ingress-rmq-ws.yaml expect; 5672 and 15672 are always present.
+  additionalPlugins:
+    - rabbitmq_stomp
+    - rabbitmq_web_stomp
+    - rabbitmq_auth_backend_ldap
+  extraPorts:
+    - name: stomp
+      port: 61613
+      containerPort: 61613
+      targetPort: 61613
+    - name: stomp-websocket
+      port: 15674
+      containerPort: 15674
+      targetPort: 15674
+  # IPv6. Two separate parts of the broker default to IPv4 and both have to be
+  # redirected; templates/config-rabbitmq-ipv6.yaml carries the full rationale.
+  # Subchart values cannot be templated, so this wiring is unconditional -- it
+  # is correct on IPv4-only, IPv6-only and dual-stack clusters alike, and the
+  # Erlang half no-ops at container start on a host without IPv6. Only a host
+  # with IPv6 compiled out of the kernel would need config.extraConfiguration
+  # below emptied.
+  #
+  # 1. Erlang name resolution and the CLI transport, decided at container start
+  #    by the rabbitmq-env.conf in that ConfigMap. Without it epmd aborts the
+  #    boot with `nxdomain` on a name that has only an AAAA record, and the
+  #    probes -- which shell out to rabbitmq-diagnostics -- hang forever.
+  extraEnvVars:
+    - name: RABBITMQ_CONF_ENV_FILE
+      value: /etc/rabbitmq-ipv6/rabbitmq-env.conf
+  extraVolumes:
+    - name: rabbitmq-ipv6
+      configMap:
+        name: waldur-rabbitmq-ipv6
+  extraVolumeMounts:
+    - name: rabbitmq-ipv6
+      mountPath: /etc/rabbitmq-ipv6
+      readOnly: true
+  # 2. The Cowboy HTTP listeners. The AMQP (5672) and STOMP (61613) listeners
+  #    already come up on [::]; the management API (15672) and web-STOMP (15674,
+  #    where ingress-rmq-ws.yaml sends the realtime event stream) do not, and
+  #    `rabbitmq-diagnostics listeners` misreports them as [::] either way.
+  config:
+    extraConfiguration: |
+      management.tcp.ip = ::
+      web_stomp.tcp.ip = ::
   resources:
     requests:
       cpu: 1
@@ -535,52 +892,10 @@ rabbitmq:
     limits:
       cpu: 2
       memory: 4096Mi
-  extraContainerPorts:
-  - name: mqtt
-    containerPort: 1883
-    protocol: TCP
-  - name: stomp
-    containerPort: 61613
-    protocol: TCP
-  - name: mqtt-websocket
-    containerPort: 15675
-    protocol: TCP
-  - name: stomp-websocket
-    containerPort: 15674
-    protocol: TCP
-  service:
-    extraPorts:
-    - name: mqtt
-      protocol: TCP
-      port: 1883
-      targetPort: mqtt
-    - name: stomp
-      protocol: TCP
-      port: 61613
-      targetPort: stomp
-    - name: mqtt-websocket
-      protocol: TCP
-      port: 15675
-      targetPort: mqtt-websocket
-    - name: stomp-websocket
-      protocol: TCP
-      port: 15674
-      targetPort: stomp-websocket
-  networkPolicy:
-    extraIngress:
-    - ports:
-      - protocol: TCP
-        containerPort: 1883
-        port: 1883
-      - protocol: TCP
-        containerPort: 15675
-        port: 15675
   persistence:
     enabled: true
     size: "10Gi"
     storageClass: ""
-  clustering:
-    forceBoot: true
   # hostname of rabbitmq service, respected only if rabbitmq.enabled = false and RMQ release is deployed separately
   host: "rmq-rabbitmq"
   # secrets of rabbitmq admin user, respected only if rabbitmq.enabled = false and RMQ release is deployed separately
@@ -589,23 +904,132 @@ rabbitmq:
     usernameKey: ""
     passwordKey: ""
 
-stressTesting:
+# Matrix chat integration (LiveKit media SFU + Matrix homeserver + lk-jwt).
+matrixChat:
   enabled: false
-  locustFilePath: "locust_task/locust_test.py"
-
-# Annotations added to all pod templates (api, worker, beat).
-# Useful for e.g. disabling OTel injection:
-#   instrumentation.opentelemetry.io/inject-python: "false"
-podAnnotations: {}
-
-# Extra environment variables injected into all pod templates (api, worker, beat).
-# Useful for e.g. disabling the OTel SDK or specific instrumentors:
-#   - name: OTEL_SDK_DISABLED
-#     value: "true"
-extraEnvVars: []
+  # The only gate for the matrix-chat NetworkPolicies (livekit, lk-jwt,
+  # homeserver). Independent of the chart-wide `networkPolicy.enabled`, which
+  # gates only the homeport/mastermind-api policies. Set this to ship the
+  # matrix/livekit policies — the LiveKit media rule is what lets Element Call
+  # media connect — without opting the rest of the stack into NetworkPolicy.
+  networkPolicy:
+    enabled: false
+  livekit:
+    # Deploy the bundled livekit-server SFU. Set to false to use an EXTERNAL,
+    # operator-managed LiveKit instead: keep lkJwt.enabled=true, point publicUrl
+    # at the external wss endpoint, and supply its API key/secret via
+    # keys.existingSecret.name (the chart only creates livekit-secret when this
+    # is true, so an external setup MUST use existingSecret).
+    enabled: false
+    imageRegistry: docker.io
+    imageName: livekit/livekit-server
+    imageTag: "v1.13.7"
+    imageDigest: ""
+    # Public wss signaling URL the browser dials (returned to clients by lk-jwt).
+    # Bundled LiveKit: reachable via the matrix ingress (e.g. wss://matrix.example.org).
+    # External LiveKit: the external instance's own wss endpoint.
+    # Either way, NOT an in-cluster name.
+    publicUrl: ""           # e.g. wss://matrix.example.org
+    resources: {}
+    keys:
+      apiKey: ""              # set this (chart creates a Secret from it) or use existingSecret
+      apiSecret: ""           # set this or use existingSecret
+      existingSecret:
+        name: ""              # reference your own Secret instead (overrides the inline values)
+        apiKeyKey: "LIVEKIT_API_KEY"        # used by lk-jwt-service
+        apiSecretKey: "LIVEKIT_API_SECRET"  # used by lk-jwt-service
+        livekitKeysKey: "LIVEKIT_KEYS"      # used by livekit-server ("apikey: secret")
+    rtc:
+      signalingPort: 7880     # signaling (wss); ClusterIP behind the shared ingress
+      udpPort: 7882           # WebRTC media, primary; LoadBalancer, never ingress
+      tcpPort: 7881           # WebRTC media, fallback
+      # Set to the LiveKit node's public IP so it advertises a reachable address in
+      # ICE candidates; otherwise calls connect but carry no audio/video.
+      useExternalIp: true
+      nodeIp: ""
+      # Extra labels merged onto the livekit-rtc LoadBalancer Service. Empty by
+      # default; some bare-metal LB controllers select the public vs internal IP
+      # pool via a label (e.g. Cilium LB-IPAM: cilium.io/public-ip: "true").
+      serviceLabels: {}
+    turn:
+      # TURN/TLS relay. Direct host candidates (udpPort/tcpPort) cover cone NATs;
+      # symmetric-NAT clients otherwise connect to signaling but carry no media.
+      # Off by default; enable when users aren't all on friendly networks.
+      enabled: false
+      # Keep 443: TLS-only firewalls (what TURN/TLS exists to traverse) allow only
+      # 443, so a relay on any other port fails for the users it should rescue. The
+      # dedicated LoadBalancer IP leaves 443 free.
+      tlsPort: 443
+      # Hostname clients dial for TURNS (and the TLS CN). MUST resolve to the
+      # livekit-rtc LoadBalancer IP, not serverName (the matrix ingress).
+      # Use a dedicated name, e.g. turn.<serverName>.
+      domain: ""
+      tls:
+        # Secret (tls.crt / tls.key) for `domain` — LiveKit terminates TURNS TLS
+        # itself. Point at the cert-manager Secret issued for `domain`.
+        existingSecret: ""
+        certKey: "tls.crt"
+        keyKey: "tls.key"
+  lkJwt:
+    # Element's LiveKit JWT service.
+    enabled: false
+    imageRegistry: ghcr.io
+    imageName: element-hq/lk-jwt-service
+    imageTag: "0.7.0"
+    # Set to pin immutably by digest; takes precedence over imageTag.
+    imageDigest: ""
+    # Accept a self-signed homeserver cert. Dev only. Prod uses a real cert.
+    insecureSkipVerifyTls: false
+    resources: {}
+  homeserver:
+    # Matrix homeserver. The backend integration was built and tested against Tuwunel.
+    enabled: false
+    imageRegistry: ghcr.io
+    imageName: matrix-construct/tuwunel
+    imageTag: "v1.9.0"
+    imageDigest: ""
+    resources: {}
+    # server_name is baked into every user/room ID (@user:<serverName>) and is
+    # IMMUTABLE once the homeserver has data. Set it to your real domain.
+    serverName: ""
+    clientPort: 6167
+    allowRegistration: true
+    # Federation must stay on: lk-jwt-service verifies the user's Matrix OpenID
+    # token via the federation endpoint before issuing a LiveKit JWT.
+    allowFederation: true
+    maxRequestSize: 104857600
+    # Lifetime in seconds of access tokens issued to clients that ask for a
+    # refresh token, e.g. Waldur's chat drawer. Logins without one, such as
+    # Element in password mode, keep non-expiring tokens and are unaffected.
+    # Must be positive: Tuwunel reads 0 as "expire immediately".
+    accessTokenTtl: 300
+    # Idle lifetime in seconds of those refresh tokens; 0 means never expire.
+    # Each refresh moves the deadline forward, so a drawer in use never expires;
+    # a page left silent this long (e.g. on a suspended laptop) starts a new
+    # session through Waldur. When a user starts a session, Waldur also signs
+    # out that user's chat devices idle for more than 24 hours, so a longer
+    # value only keeps devices of users who start no other session.
+    refreshTokenTtl: 86400
+    # Public lk-jwt base URL advertised to clients, e.g. https://<serverName>.
+    # Do NOT append /sfu — the client adds /get_token itself, so a trailing
+    # /sfu produces a 404 on /sfu/get_token and calls never connect.
+    # Required for calls. Leave empty until lk-jwt-service is deployed.
+    livekitServiceUrl: ""
+    # Registration token that gates user provisioning. MUST equal the backend's
+    # MATRIX_USER_REGISTRATION_SECRET.
+    registrationToken: ""
+    registrationTokenExistingSecret:
+      name: ""
+      key: "registration_token"
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClass: ""
+      # Empty: the StatefulSet provisions its own PVC (data-matrix-homeserver-0)
+      # from the volumeClaimTemplate. Set it to mount a pre-existing claim
+      # instead — e.g. to adopt the `matrix-homeserver-data` PVC from a prior
+      # Deployment-based release without losing the embedded database.
+      existingClaim: ""
 
 global:
   imageRegistry: "docker.io"
-  # TODO: remove after migration to a stable RabbitMQ and PostgreSQL images from bitnamilegacy repo
-  security:
-    allowInsecureImages: true

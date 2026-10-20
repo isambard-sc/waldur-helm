@@ -1,5 +1,7 @@
 include:
   - project: "waldur/waldur-pipelines"
+    file: "/templates/release/tag-release.yml"
+  - project: "waldur/waldur-pipelines"
     file: "/templates/stages.yml"
   - project: "waldur/waldur-pipelines"
     file: "/templates/test/check-merge-compatibility.yml"
@@ -25,20 +27,33 @@ Run linter:
     - apk add jq python3
     - apk add -X http://dl-cdn.alpinelinux.org/alpine/edge/community -u alpine-keys
     - apk add yq --repository=http://dl-cdn.alpinelinux.org/alpine/edge/community
+    - helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v0.8.2
   script:
     - helm dependency update waldur/
     - helm lint waldur/
     - helm lint waldur/ -f waldur/test/values.yaml
+    # Gateway API path. `helm lint` has no --api-versions flag, so
+    # waldur.gatewayAPI.assertAvailable's `fail` logs as INFO here rather than
+    # failing the lint (Helm's lint engine treats template execution errors as
+    # advisory) -- the render below is what actually exercises the CRD check,
+    # via --api-versions simulating what a real cluster with the Gateway API
+    # CRDs installed would report to .Capabilities.APIVersions.
+    - helm lint waldur/ -f waldur/test/values.yaml -f waldur/test/values-gateway.yaml
+    - helm unittest waldur/
     # lint for correctness of known configuration
     - mkdir rendered-templates && helm template waldur -f waldur/test/values.yaml --output-dir rendered-templates/ --debug
     - yq e '.data."features.json"' rendered-templates/waldur/templates/config-features-json.yml | jq
     - yq e '.data."override.conf.py"' rendered-templates/waldur/templates/config-override.yaml > rendered-templates/waldur/templates/override.conf.py
     - python3 -m py_compile rendered-templates/waldur/templates/override.conf.py
+    # Gateway API path renders alongside the same known configuration, plus
+    # ingress (both enabled at once, see waldur/test/values-gateway.yaml).
+    - mkdir rendered-templates-gateway && helm template waldur -f waldur/test/values.yaml -f waldur/test/values-gateway.yaml --output-dir rendered-templates-gateway/ --debug --api-versions gateway.networking.k8s.io/v1/HTTPRoute --api-versions gateway.networking.k8s.io/v1/Gateway
   artifacts:
     expire_in: 1 week
     when: always
     paths:
       - rendered-templates
+      - rendered-templates-gateway
 
 .Test template:
   image: $HELM_TEST_IMAGE
@@ -50,9 +65,10 @@ Run linter:
     - apk add curl git
     - kubectl config view
     - kubectl config current-context
-    - helm repo add stable https://charts.helm.sh/stable
-    - helm repo add bitnami https://charts.bitnami.com/bitnami
-    - helm repo update
+    # Dependencies are OCI artifacts (oci://registry-1.docker.io/cloudpirates),
+    # which need no `helm repo add`. The former bitnami and stable repos are
+    # gone: nothing references charts.helm.sh/stable, and the Bitnami subcharts
+    # were replaced.
     - helm dependency update waldur/
 
 .Cleanup template:
@@ -61,6 +77,7 @@ Run linter:
     - export KUBECONFIG=${K8S_CONFIG_WALDUR_HELM_TEST}
     - helm uninstall waldur || true
     - kubectl delete job waldur-mastermind-init-whitelabeling-job || true
+    - kubectl delete pvc -l app.kubernetes.io/instance=waldur --ignore-not-found
 
 Validate release installation (dry-run):
   extends: .Test template
@@ -77,6 +94,9 @@ Validate release installation (dry-run):
 
 Test release installation and readiness:
   extends: .Test template
+  # The broker apply can roll the RabbitMQ StatefulSet, and this job shares one
+  # `waldur` release with every other pipeline on the test cluster.
+  resource_group: waldur-helm-test
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
@@ -89,59 +109,135 @@ Test release installation and readiness:
         - waldur/**/*
   script:
     - set -xv
+    # The chart's test values run against an operator-managed broker
+    # (rabbitmq.enabled=false, rabbitmq.host=rabbitmq-waldur-test), so the
+    # cluster has to exist before `helm install --wait` -- otherwise the
+    # mastermind pods block on a Service and a secret that aren't there.
+    # `kubectl apply` is idempotent, so a rebuilt test cluster self-heals here
+    # rather than needing the CR re-applied by hand.
+    - |
+      # Probe the namespaced resource, not the CRD: the CI credential is scoped
+      # to the test namespace and cannot read cluster-scoped objects, so
+      # `kubectl get crd` fails even when the operator is installed. Surface the
+      # real kubectl error rather than swallowing it.
+      if ! PROBE=$(kubectl get rabbitmqcluster -o name 2>&1); then
+        echo "ERROR: cannot list RabbitmqCluster resources in this namespace."
+        echo "kubectl said: ${PROBE}"
+        echo
+        echo "waldur/test/values.yaml sets rabbitmq.enabled=false and expects an"
+        echo "operator-managed broker. If the RabbitMQ Cluster Operator is missing,"
+        echo "install it once as a cluster admin:"
+        echo "  kubectl apply -f https://github.com/rabbitmq/cluster-operator/releases/download/v2.22.5/cluster-operator.yml"
+        echo "See docs/rabbitmq-operator.md."
+        exit 1
+      fi
+    - |
+      set -e
+      RMQ=rabbitmq-waldur-test
+      # Server-side apply so field ownership is explicit. The object may already
+      # exist without a last-applied-configuration annotation (created by hand),
+      # which makes a client-side apply drop unmanaged fields on the *second*
+      # run rather than the first.
+      kubectl apply --server-side --force-conflicts -f waldur/test/k8s/rabbitmq-cluster.yaml
+
+      # The operator reconciles asynchronously. Immediately after apply the CR
+      # still carries the previous generation's status, so waiting on
+      # AllReplicasReady straight away can return True for the *old* StatefulSet.
+      # Gate on observedGeneration catching up first.
+      GEN=$(kubectl get rabbitmqcluster "$RMQ" -o jsonpath='{.metadata.generation}')
+      for _ in $(seq 1 24); do
+        OBS=$(kubectl get rabbitmqcluster "$RMQ" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || true)
+        if [ -n "$OBS" ] && [ "$OBS" -ge "$GEN" ] 2>/dev/null; then break; fi
+        sleep 5
+      done
+
+      kubectl rollout status "statefulset/${RMQ}-server" --timeout=10m
+      kubectl wait --for=condition=AllReplicasReady --timeout=10m "rabbitmqcluster/${RMQ}"
+
+      # helm install --wait would otherwise sit for 20 minutes while every pod
+      # fails on a missing secretKeyRef.
+      kubectl get "secret/${RMQ}-default-user" -o jsonpath='{.data.username}' >/dev/null
+
+      # The operator derives Service ports from spec.rabbitmq.additionalPlugins,
+      # and the chart hard-codes them: 15674 backs templates/ingress-rmq-ws.yaml,
+      # 61613/15672 are written into the app config by config-override.yaml.
+      # Assert them so a drifted plugin list fails here instead of silently
+      # leaving the STOMP event path dead.
+      for PORT in 5672 15672 15674 61613; do
+        if ! kubectl get "svc/${RMQ}" -o jsonpath="{.spec.ports[?(@.port==${PORT})].port}" | grep -q "^${PORT}$"; then
+          echo "ERROR: port ${PORT} is missing from service/${RMQ}."
+          echo "Check that waldur/test/k8s/rabbitmq-cluster.yaml still lists rabbitmq_stomp and rabbitmq_web_stomp."
+          kubectl get "svc/${RMQ}" -o yaml
+          exit 1
+        fi
+      done
     - helm dep update waldur/
-    - helm install waldur waldur/ --wait -f waldur/test/values.yaml --timeout 20m0s
+    - helm install waldur waldur/ --wait -f waldur/test/values.yaml --set waldur.pullPolicy=Always --timeout 20m0s
   after_script:
     - set -xv
     - export KUBECONFIG=${K8S_CONFIG_WALDUR_HELM_TEST}
     - helm list
+    # The pod loop below filters on app.kubernetes.io/instance=waldur, which the
+    # operator's resources do not carry, so a broken broker would otherwise leave
+    # no trace in this job's output.
+    - kubectl get rabbitmqcluster -o wide || true
+    - kubectl get svc rabbitmq-waldur-test -o yaml || true
+    - kubectl logs -l app.kubernetes.io/name=rabbitmq-waldur-test --tail=100 --all-containers || true
     - kubectl apply -f waldur/test/k8s/networkpolicy-override.yaml
     - kubectl delete networkpolicy namespace-isolation --ignore-not-found
     - kubectl get pods
+    - kubectl get pvc
+    - kubectl get events --sort-by=.lastTimestamp | tail -30
     - |
       for NAME in $(kubectl get pods -l app.kubernetes.io/instance=waldur --field-selector status.phase!=Running -o name); do
         echo "Pod name: $NAME"
-        echo "Status: $(kubectl get pod $NAME -o jsonpath={.status.phase})"
+        kubectl describe $NAME | tail -30
         kubectl logs $NAME --tail 100 --all-containers
         echo ----
       done
 
-.Test ArgoCD template:
-  image: registry.hpc.ut.ee/iljatest/docker:24.0.6
-  variables:
-    APPLICATION_NAME: waldur-helm-$CI_MERGE_REQUEST_IID
+Validate bundled dependencies (dry-run):
+  extends: .Test template
+  # A real install of the bundled path would need its own namespace: several
+  # resources in this chart have fixed, non-release-prefixed names
+  # (api-celery-config, mastermind-*, livekit-secret) and the ingress hostnames
+  # are fixed, so a second release in the shared namespace collides. The CI
+  # credential is scoped to a single namespace and cannot create one, so this
+  # job validates the bundled path without installing it. Runtime coverage
+  # needs a pre-created namespace plus RBAC -- tracked separately.
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      changes:
-        - waldur/**/*
+    - if: '$SKIP_TESTS == "true" || $SKIP_TESTS == "yes"'
       when: never
-  before_script:
-    - echo 'PasswordAuthentication no' >> /etc/ssh/ssh_config
-    - cat /etc/ssh/ssh_config
-    - SSH_COMMAND="ssh -i .ssh/id_waldur_dev_ssh_pkey -o PasswordAuthentication=no -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null rocky@172.17.89.30"
-    - SCP_COMMAND="scp -i .ssh/id_waldur_dev_ssh_pkey -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    - mkdir -p .ssh
-    - cp -vf $WALDUR_DEV_SSH_PKEY .ssh/id_waldur_dev_ssh_pkey
-    - cp -vf $WALDUR_DEV_SSH_PUBKEY .ssh/id_waldur_dev_ssh_pkey.pub
-    - chmod 600 .ssh/id_waldur_dev_ssh_pkey
-  after_script:
-    - rm -fv .ssh/id_waldur_dev_ssh_pkey .ssh/id_waldur_dev_ssh_pkey.pub
-
-Test ArgoCD sync:
-  extends: .Test ArgoCD template
-  stage: test
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH == "master"'
+    - if: $CI_COMMIT_TAG
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
-    - echo ${APPLICATION_NAME}
-    - $SSH_COMMAND "argocd login 10.43.40.117:80 --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --name default --insecure"
-    - $SSH_COMMAND "argocd account get-user-info"
-    - $SSH_COMMAND "argocd app list"
-    - $SSH_COMMAND "argocd repo add https://code.opennodecloud.com/waldur/waldur-helm.git --username gitlab-ci-token --password $CI_JOB_TOKEN --upsert"
-    - $SSH_COMMAND "argocd app sync $APPLICATION_NAME --timeout 2400 --prune"
-    - $SSH_COMMAND "argocd app wait $APPLICATION_NAME"
-    - $SSH_COMMAND "argocd repo rm https://code.opennodecloud.com/waldur/waldur-helm.git"
+    - set -xv
+    - helm dep update waldur/
+    - |
+      helm install waldur waldur/ --dry-run --debug \
+        -f waldur/test/values.yaml -f waldur/test/bundled-values.yaml
+    # Assert the bundled subcharts actually render the Services and ports the
+    # chart hard-codes: 15674 backs templates/ingress-rmq-ws.yaml and
+    # 61613/15672 are written into the app config by config-override.yaml.
+    - |
+      helm template waldur waldur/ \
+        -f waldur/test/values.yaml -f waldur/test/bundled-values.yaml > /tmp/bundled.yaml
+      for EXPECT in "waldur-postgresql" "waldur-rabbitmq"; do
+        grep -q "name: ${EXPECT}$" /tmp/bundled.yaml || {
+          echo "ERROR: expected Service ${EXPECT} in the bundled render"; exit 1; }
+      done
+      for PORT in 5672 15672 15674 61613; do
+        grep -q "port: ${PORT}$" /tmp/bundled.yaml || {
+          echo "ERROR: port ${PORT} missing from the bundled render"; exit 1; }
+      done
+      echo "bundled dependencies render with the expected services and ports."
 
 Cleanup previous test deployment:
   extends: .Cleanup template
+  resource_group: waldur-helm-test
   stage: .pre
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -166,13 +262,8 @@ Publish new chart version and update docs on github:
     # Add version-specific docs
     - cp README.md waldur/
     - cp -r docs/ waldur/
-    # Add correct version to Chart.yaml
-    - |
-      sed -i -E -e "s/^version: ('.*'|.*)$/version: $CI_COMMIT_TAG/" waldur/Chart.yaml
-    - |
-      sed -i -E -e "s/^appVersion: ('.*'|.*)$/appVersion: \"$CI_COMMIT_TAG\"/" waldur/Chart.yaml
-    - |
-      sed -i -E -e "s/^  imageTag: \"latest\"$/  imageTag: \"$CI_COMMIT_TAG\"/" waldur/values.yaml
+    # Update Chart.yaml and image tags (mastermind + homeport)
+    - bash scripts/set-version.sh $CI_COMMIT_TAG
     # Package Waldur chart with a new version
     - helm dependency update waldur/
     - helm package waldur/
@@ -208,7 +299,7 @@ Check for deprecated Kubernetes resources:
       when: never
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
     - if: $CI_COMMIT_TAG
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
@@ -228,3 +319,25 @@ Check for deprecated Kubernetes resources:
     - helm template waldur | pluto detect --target-versions k8s=v1.27.0 -v 5 -
     - helm template waldur | pluto detect --target-versions k8s=v1.28.0 -v 5 -
     - helm template waldur | pluto detect --target-versions k8s=v1.29.0 -v 5 -
+
+# These seds intentionally do NOT reuse scripts/set-version.sh, even though it
+# covers the same files. That script additionally pins waldur.homeport.imageTag,
+# which must stay empty on the branch so deployment-homeport.yaml can fall back
+# to waldur.imageTag; pinning it belongs to the packaged chart only, where the
+# publish job applies set-version.sh at package time. The script is also bash,
+# and the alpine/git image this job runs on has no bash.
+Release tag:
+  extends: .release-tag-base
+  script:
+    - >-
+      sed -i -E -e "s/^version: ('.*'|.*)$/version: $RELEASE_VERSION/" waldur/Chart.yaml
+    - >-
+      sed -i -E -e "s/^appVersion: ('.*'|.*)$/appVersion: \"$RELEASE_VERSION\"/" waldur/Chart.yaml
+    - >-
+      sed -i -E -e "s/^  imageTag: ('.*'|.*)$/  imageTag: \"$RELEASE_VERSION\"/" waldur/values.yaml
+    - git add waldur/Chart.yaml waldur/values.yaml
+    # Push to HEAD:$CI_COMMIT_REF_NAME, not HEAD: the runner checks out a
+    # detached HEAD, so git cannot infer the remote branch from HEAD alone.
+    - git diff --cached --quiet && echo "waldur-helm versions already updated" || (git commit -m "Set target version to ${RELEASE_VERSION}" && git push -o "ci.skip" origin "HEAD:${CI_COMMIT_REF_NAME}")
+    - git tag -a $RELEASE_VERSION -m "Release $RELEASE_VERSION" || echo "Tag already exists"
+    - git push origin $RELEASE_VERSION || echo "Tag already pushed"

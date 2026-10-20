@@ -14,6 +14,13 @@ spec:
       labels:
         app: waldur-homeport
         {{ include "waldur.labels" . | nindent 8 }}
+        {{- with .Values.homeport.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.homeport.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       {{ if .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -23,12 +30,17 @@ spec:
       {{ end }}
       {{ if .Values.hostAliases }}
       hostAliases:
-        {{ toYaml .Values.hostaliases | nindent 8 }}
+        {{ toYaml .Values.hostAliases | nindent 8 }}
       {{ end }}
       containers:
         - name: waldur-homeport
-          image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.homeport.imageName }}:{{ .Values.waldur.homeport.imageTag }}
-          imagePullPolicy: {{ .Values.waldur.pullPolicy }}
+          {{- $homeportTag := .Values.waldur.homeport.imageTag | default .Values.waldur.imageTag }}
+          {{- if .Values.waldur.homeport.imageDigest }}
+          image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.homeport.imageName }}@{{ .Values.waldur.homeport.imageDigest }}
+          {{- else }}
+          image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.homeport.imageName }}:{{ $homeportTag }}
+          {{- end }}
+          imagePullPolicy: {{ include "waldur.imagePullPolicy" (dict "tag" $homeportTag "Values" .Values) }}
           livenessProbe:
             httpGet:
               port: 8080
@@ -58,8 +70,24 @@ spec:
             - name: AUTH_STORAGE
               value: 'sessionStorage'
             {{ end }}
+            {{- with (include "waldur.extraEnvVars" .Values.homeport) }}
+            {{- . | nindent 12 }}
+            {{- end }}
+          {{- $envFrom := include "waldur.extraEnvFrom" .Values.homeport }}
+          {{- if $envFrom }}
+          envFrom:
+            {{- $envFrom | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.homeportResources | nindent 12 }}
+          {{- with (include "waldur.extraVolumeMounts" .Values.homeport) }}
+          volumeMounts:
+            {{- . | nindent 12 }}
+          {{- end }}
+      {{- with (include "waldur.extraVolumes" .Values.homeport) }}
+      volumes:
+        {{- . | nindent 8 }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

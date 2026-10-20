@@ -1,6 +1,6 @@
 # Limiting network access to Mastermind APIs
 
-Waldur Helm allows limiting network access to Mastermind API endpoints - i.e. `/api/`, `/api-auth/`, `/admin/` - based on whitelisting the subnets from where access is allowed. To define a list of allowed subnets in CIDR format for the all the API endpoint, please use `ingress.whitelistSourceRange` option in `values.yaml`. Example:
+Waldur Helm allows limiting network access to Mastermind API endpoints - i.e. `/api/`, `/api-auth/`, `/scim/`, `/admin/` - based on whitelisting the subnets from where access is allowed. To define a list of allowed subnets in CIDR format for the all the API endpoint, please use `ingress.whitelistSourceRange` option in `values.yaml`. Example:
 
 ```yaml
 ...
@@ -23,3 +23,7 @@ ingress:
 This will limit access to the admin endpoint only for `192.168.22.1` IP. **Note: The `whitelistSourceRangeAdmin` option takes precedence over `whitelistSourceRange`.**
 
 In case of multiple subnets/IPs, comma separated list can be used as a value. E.g.: `192.168.22.1/32,192.168.21.0/24`. This works for both options.
+
+**Note**: this page covers the Ingress path. [Gateway API](gateway-api.md) has no standard
+resource for IP allow-listing -- see the `extraPolicies` section of that doc for the
+implementation-specific equivalent (e.g. Envoy Gateway's `SecurityPolicy`).

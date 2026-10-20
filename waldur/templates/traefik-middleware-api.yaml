@@ -1,0 +1,103 @@
+{{- if and .Values.ingress.enabled (eq .Values.ingress.className "traefik") }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-redirect-https
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-cors
+spec:
+  headers:
+    accessControlAllowMethods:
+      - GET
+      - POST
+      - PUT
+      - PATCH
+      - DELETE
+      - OPTIONS
+    accessControlAllowHeaders:
+      - DNT
+      - Keep-Alive
+      - User-Agent
+      - X-Requested-With
+      - If-Modified-Since
+      - Cache-Control
+      - Content-Type
+      - Range
+      - Authorization
+      - sentry-trace
+      - baggage
+      - X-Impersonated-User-Uuid
+    accessControlExposeHeaders:
+      - Link
+      - X-Result-Count
+      - Content-Length
+      - Content-Range
+    accessControlAllowOriginList:
+      - "*"
+    accessControlMaxAge: 100
+    addVaryHeader: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-buffering
+spec:
+  buffering:
+    maxRequestBodyBytes: 10485760
+---
+# Compress proxied API responses (parity with the nginx/haproxy ingress
+# branches). Payloads such as /api/roles/ are mostly repeated permission-enum
+# strings and shrink ~85% under gzip. Scoped to API-ish content types and to
+# responses over 256 bytes to skip tiny bodies where compression is pointless.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-compress
+spec:
+  compress:
+    minResponseBodyBytes: 256
+    includedContentTypes:
+      - application/json
+      - application/javascript
+      - text/css
+      - text/plain
+      - application/xml
+---
+{{- if .Values.ingress.whitelistSourceRange }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-ipallowlist
+spec:
+  ipAllowList:
+    sourceRange:
+      {{- range (splitList "," .Values.ingress.whitelistSourceRange) }}
+      - {{ . | trim | quote }}
+      {{- end }}
+---
+{{- end }}
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-chain
+spec:
+  chain:
+    middlewares:
+      {{- if eq (include "waldur.sslRedirect" (dict "scheme" .Values.apiScheme "Values" .Values)) "true" }}
+      - name: api-redirect-https
+      {{- end }}
+      - name: api-cors
+      - name: api-buffering
+      - name: api-compress
+      {{- if .Values.ingress.whitelistSourceRange }}
+      - name: api-ipallowlist
+      {{- end }}
+{{- end }}

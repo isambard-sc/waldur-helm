@@ -13,10 +13,14 @@ fullnameOverride: ""
 
 apiScheme: "https"
 homeportScheme: "https"
+
 apiHostname: "helm-testing.waldur.com"
+localApiHostname: ""
 apiExtraHosts:
   - helm-testing-02.waldur.com
+
 homeportHostname: "helm-testing.waldur.com"
+localHomeportHostname: ""
 homeportExtraHosts:
   - helm-testing-02.waldur.com
 
@@ -35,7 +39,7 @@ workerResources:
     memory: 2000Mi
     cpu: 1000m
   limits:
-    memory: 4000Mi
+    memory: 8000Mi
     cpu: 2000m
 
 homeportResources:
@@ -76,19 +80,49 @@ nodeSelector: {}
 tolerations: []
 
 ingress:
-  className: "nginx"
+  enabled: true
+  className: "traefik"
   tls:
     enabled: true
-    source: "secret" # Possible values: `letsEncrypt` and `secret`
-    customMastermindSecretName: ""
-    customHomeportSecretName: ""
-    secretsDir: "tls"  # Enabled only if source == `secret`
-  whitelistSourceRange: '172.17.36.95/32,172.18.128.82/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.17.36.8/32,172.17.152.11/32,172.18.128.77/32,172.18.64.0/24'
-  whitelistSourceRangeAdmin: '172.17.36.95/32,172.18.128.82/32,172.17.152.13/32,172.18.4.16/32,172.18.130.4/32,172.17.36.92/32,172.18.4.31/32,217.159.213.82/32,172.18.128.78/32,172.18.64.0/24'
+    source: "letsEncrypt"
+    clusterIssuerName: "vault-hpc-issuer"
+    customMastermindSecretName: "helm-testing.waldur.com"
+    customHomeportSecretName: "helm-testing.waldur.com"
+  whitelistSourceRange: ''
+  whitelistSourceRangeAdmin: ''
+  annotations:
+    external-dns.alpha.kubernetes.io/ttl: "60"
 
 celery:
   worker:
     enabled: true
+  resultDatabase: "celery_results"
+  concurrency: 12
+
+gunicorn:
+  timeout: 60
+
+api:
+  extraEnvVars:
+    - name: WALDUR_API_TEST_HOOK
+      value: "1"
+  podAnnotations:
+    waldur.io/test: "api"
+
+worker:
+  extraEnvVars:
+    - name: WALDUR_WORKER_TEST_HOOK
+      value: "1"
+
+beat:
+  extraEnvVars:
+    - name: WALDUR_BEAT_TEST_HOOK
+      value: "1"
+
+homeport:
+  extraEnvVars:
+    - name: WALDUR_HOMEPORT_TEST_HOOK
+      value: "1"
 
 proxy:
   httpsProxy: ""
@@ -103,6 +137,7 @@ hostAliases:
 waldur:
   imageName: "opennode/waldur-mastermind"
   imageTag: "latest"
+  imageDigest: ""
   initdbEnabled: true
   initdbImageName: "library/postgres"
   pullPolicy: Always
@@ -110,10 +145,17 @@ waldur:
   secretKeyExistingSecret:
     name: ""
     key: ""
-  supportToken: "support-token"
+  supportToken: ""
+  supportTokenExistingSecret:
+    name: waldur-support-token
+    key: token
   staffToken: "staff-token"
   debug: true
   mail:
+    existingSecret:
+      name: ""
+      userKey: "MAIL_USER"
+      passwordKey: "MAIL_PASSWORD"
     host: "test.email.waldur.example.com"
     port: "1055"
     username: "email-username"
@@ -131,6 +173,19 @@ waldur:
     - protect_keycloak_user_details
     - marketplace_show_resource_end_date
     - user_show_username
+  featureFlags:
+    marketplace.conceal_offering_pricing_tab_in_public_view: true
+    project.estimated_cost: false
+  settingsOverrides:
+    SCIM_INBOUND_ENABLED: true
+    MARKETPLACE_LANDING_PAGE: "Catalog"
+  customRoles:
+    - role: CUSTOMER.AUDITOR
+      scope: customer
+      description: "Read-only auditor"
+      permissions:
+        - CUSTOMER.LIST_USERS
+        - PROJECT.LIST
   currencyName: "EUR"
   mastermindUrl: "http://waldur.example.com/"
   site:
@@ -188,11 +243,33 @@ waldur:
         - "RESOURCE.SET_LIMITS"
         - "RESOURCE.SET_PLAN"
         - "RESOURCE.TERMINATE"
+    CUSTOMER.READER:
+      addPermissions:
+        - ORDER.LIST
+        - RESOURCE.LIST
+        - RESOURCE.LIST_IMPORTABLE
+        - INVITATION.LIST
+        - PROJECT.LIST
+        - CUSTOMER.LIST_USERS
+        - CUSTOMER.LIST_PERMISSION_REVIEWS
+        - SERVICE_PROVIDER.LIST_USER_CUSTOMERS
+        - SERVICE_PROVIDER.LIST_KEYS
+        - SERVICE_PROVIDER.LIST_USERS
+        - SERVICE_PROVIDER.LIST_PROJECT_PERMISSIONS
+        - SERVICE_PROVIDER.LIST_PROJECTS
+        - SERVICE_PROVIDER.LIST_CUSTOMER_PROJECTS
+        - SERVICE_PROVIDER.LIST_CUSTOMERS
+        - CALL.LIST
+        - ROUND.LIST
+        - PROPOSAL.LIST
   authMethods:
     - LOCAL_SIGNIN
     - LDAP
     - VALIMO
   socialAuthMethods: []
+  socialAuthMethodsExistingSecret:
+    name: ""
+    key: ""
   localIdp:
     name: "Local IDP"
     label: "Local IDP label"
@@ -226,6 +303,9 @@ waldur:
     admins: "cn=admins,"
     support: "cn=support,"
   freeipa:
+    existingSecret:
+      name: ""
+      key: ""
     hostname: "ipa.address"
     password: "freeipa-secret"
     username: "waldur"
@@ -271,10 +351,9 @@ waldur:
       fund: "11"
       eeluks: "EE00"
       kuluuksus: "KNA00"
-  slurm:
-    customerPrefix: "test_cst_"
-    projectPrefix: "test_pr_"
-    allocationPrefix: "test_alloc"
+  openportal:
+    existingSecret:
+      name: ""
   support:
     backend: "zammad" # Can be "atlassian", "zammad" or "smax"
     atlassian:
@@ -327,11 +406,17 @@ waldur:
       kubeconfig: |
         test content
         for multiline kubeconfig
+      kubeconfigSecret:
+        name: ""
+        key: ""
       k8sNamespace: "default"
       jobTimeout: 1800
   pid_datacite:
     repository_id: "repo.test"
     password: "datacite-pid"
+    passwordSecret:
+      name: ""
+      key: ""
     prefix: "11.11111"
     url: "https://datacite-url/dois"
     publisher: "WaldurTest"
@@ -388,7 +473,7 @@ waldur:
     individual: 3
     group: 3
   mastermindTemplating:
-    mastermindTemplatesPath: "mastermind_templates/mastermind-templates.yaml"
+    mastermindTemplatesPath: ""
     mastermindTemplates:
       users/invitation_notification_message.txt: |
           test
@@ -447,6 +532,7 @@ waldur:
   ssh_private_key_path: ""
   homeport:
     imageName: "opennode/waldur-homeport"
+    imageTag: ""
     matomoUrlBase: ""
     matomoSiteId: ""
     customSentryURL: ""
@@ -459,7 +545,7 @@ waldur:
     includeAnnotations: false
   uvkEverypay:
     enabled: false
-    imageTag: latest
+    imageTag: "latest"
     uvkServer: "https://uvk-test.ut.ee/client/a74/server.php?format=JSON&action=uvk__"
     everypayGateway: "https://igw-demo.every-pay.com/api/v4"
     everypayUsername: "abc"
@@ -469,8 +555,7 @@ waldur:
     azureClientSecret: ""
     azureScope: ""
   rabbitmqEvents:
-    mqttEnabled: false
-    stompEnabled: false
+    stompEnabled: true
 
 networkPolicy:
   enabled: true
@@ -483,57 +568,40 @@ readonlyDB:
   enabled: false
   username: ""
   password: ""
+  passwordExistingSecret:
+    name: ""
+    key: "READONLY_DB_PASSWORD"
 
 externalDB:
-  enabled: false
-  flavor: "zalando"
+  enabled: true
   secretName: "waldur.waldur-testing-postgres.credentials.postgresql.acid.zalan.do"
   serviceName: "waldur-testing-postgres"
 
 postgresql:
-  enabled: true
+  # Bundled PostgreSQL for dev/test installs (CloudPirates chart, official
+  # docker.io/postgres image). CI's default install uses externalDB instead;
+  # the bundled path is exercised by waldur/test/bundled-values.yaml.
+  enabled: false
   auth:
     username: "waldur"
     password: "waldur"
     database: "waldur"
-  # The values are in use only if postgresql.enabled = true
-  primary:
-    persistence:
-      size: "10Gi"
-    resources:
-      requests:
-        memory: "1024Mi"
-        cpu: "500m"
-      limits:
-        memory: "2048Mi"
-        cpu: "1000m"
+  # The values below are in use only if postgresql.enabled = true
   image:
-    repository: bitnamilegacy/postgresql
-    tag: "16.4.0-debian-12-r19"
-  metrics:
+    # Matches waldur.postgresql.version in _helpers.tpl (client image for the
+    # initdb/backup containers) -- move both together.
+    tag: "17.6"
+  persistence:
     enabled: true
-    image:
-      registry: "docker.io"
-      repository: bitnamilegacy/postgres-exporter
-      tag: 0.17.1-debian-12-r14
+    size: "10Gi"
+  resources:
+    requests:
+      memory: "1024Mi"
+      cpu: "500m"
+    limits:
+      memory: "2048Mi"
+      cpu: "1000m"
 
-postgresqlha:
-  enabled: false
-  postgresql:
-    database: waldur
-    username: waldur
-    password: waldur
-    postgresPassword: postgres
-    repmgrPassword: repmgr
-    replicaCount: 1
-    image:
-      repository: bitnamilegacy/postgresql-repmgr
-      tag: "16.4.0-debian-12-r26"
-  pgpool:
-    adminPassword: "2ILwp6GBDKNRMymXoDU="
-    image:
-      repository: bitnamilegacy/pgpool
-      tag: "4.6.2-debian-12-r7"
 
 postgresBackup:
   enabled: true
@@ -543,7 +611,11 @@ postgresBackup:
   image: opennode/postgres-minio:0.1.0
   name: "waldur"
 
-minio:
+# S3-compatible destination for the optional postgresBackup CronJobs.
+# Any S3 endpoint works -- the jobs use the `mc` client, so MinIO, AWS S3,
+# Ceph RGW and friends are all fine. Only consulted when
+# postgresBackup.enabled is true.
+backupStorage:
   accessKey: "accessKey"
   secretKey: "secret"
   bucketName: data
@@ -551,16 +623,31 @@ minio:
   endpoint: "http://minio:9000" ## See docs/service-endpoint.md for details.
 
 rabbitmq:
-  enabled: true
+  # CI's default install points at the operator-managed RabbitmqCluster
+  # (waldur/test/k8s/rabbitmq-cluster.yaml); the bundled subchart is exercised
+  # by waldur/test/bundled-values.yaml instead.
+  enabled: false
   auth:
     erlangCookie: "30ed8c5d20cadb62f491987d2e292848f8d35b26"
     username: "waldur"
     password: "waldur"
-  # The values are in use only if rabbitmq.enabled = true
+  # The values below are in use only if rabbitmq.enabled = true
   image:
-    repository: "bitnamilegacy/rabbitmq"
-    tag: "4.1.3-debian-12-r1"
+    tag: "4.3.5-management"
   replicaCount: 1
+  additionalPlugins:
+    - rabbitmq_stomp
+    - rabbitmq_web_stomp
+    - rabbitmq_auth_backend_ldap
+  extraPorts:
+    - name: stomp
+      port: 61613
+      containerPort: 61613
+      targetPort: 61613
+    - name: stomp-websocket
+      port: 15674
+      containerPort: 15674
+      targetPort: 15674
   resources:
     requests:
       cpu: 1
@@ -568,49 +655,56 @@ rabbitmq:
     limits:
       cpu: 2
       memory: 1024Mi
-  extraContainerPorts:
-  - name: mqtt
-    containerPort: 1883
-    protocol: TCP
-  - name: mqtt-websocket
-    containerPort: 15675
-    protocol: TCP
-  service:
-    extraPorts:
-    - name: mqtt
-      protocol: TCP
-      port: 1883
-      targetPort: mqtt
-    - name: mqtt-websocket
-      protocol: TCP
-      port: 15675
-      targetPort: mqtt-websocket
-  networkPolicy:
-    extraIngress:
-    - ports:
-      - protocol: TCP
-        containerPort: 1883
-        port: 1883
-      - protocol: TCP
-        containerPort: 15675
-        port: 15675
   persistence:
     enabled: true
     size: "10Gi"
     storageClass: ""
-  clustering:
-    forceBoot: true
   # hostname of rabbitmq service, respected only if rabbitmq.enabled = false and RMQ release is deployed separately
-  host: "rmq-rabbitmq"
+  host: "rabbitmq-waldur-test"
   # secrets of rabbitmq admin user, respected only if rabbitmq.enabled = false and RMQ release is deployed separately
   secret:
-    name: ""
-    usernameKey: ""
-    passwordKey: ""
+    name: "rabbitmq-waldur-test-default-user"
+    usernameKey: "username"
+    passwordKey: "password"
 
-stressTesting:
-  enabled: false
-  locustFilePath: "locust_task/locust_test.py"
+
+# Matrix chat smoke test on helm-testing. Reuses the apex host (already resolves,
+# already has a vault-hpc-issuer cert) instead of a dedicated subdomain — the
+# matrix ingress only claims specific path prefixes, so traefik longest-prefix
+# routing sends them to the matrix services and everything else to homeport.
+# This proves the chart deploys and serves; it is not a full backend↔matrix test.
+# TURN off — direct host candidates are enough to verify the stack comes up.
+matrixChat:
+  enabled: true
+  # Matrix policies are gated on their own flag, not the chart-wide
+  # networkPolicy.enabled above — enable it so the media policy renders here.
+  networkPolicy:
+    enabled: true
+  livekit:
+    enabled: true
+    publicUrl: "wss://helm-testing.waldur.com"
+    keys:
+      apiKey: "waldur-helmtest"
+      apiSecret: "c4f54a4a734e2dac5fc2b3a7c3ff37b1abd71c60e4bb3e07"
+    rtc:
+      # helm-testing runs on UT HPC Cilium LB-IPAM. Without this label the
+      # livekit-rtc Service lands on the internal campus pool, so WebRTC media is
+      # unreachable from the internet; the label opts it into the public pool.
+      serviceLabels:
+        cilium.io/public-ip: "true"
+      # Public LB IP assigned by Cilium from the label above. STUN auto-discovery
+      # returns the cluster egress NAT (wrong for inbound), so advertise it
+      # explicitly; otherwise calls connect but carry no audio/video.
+      nodeIp: "193.40.46.193"
+    turn:
+      enabled: false
+  lkJwt:
+    enabled: true
+  homeserver:
+    enabled: true
+    serverName: "helm-testing.waldur.com"
+    livekitServiceUrl: "https://helm-testing.waldur.com"
+    registrationToken: "helmtest-registration-token"
 
 global:
   imageRegistry: "registry.hpc.ut.ee/mirror"
