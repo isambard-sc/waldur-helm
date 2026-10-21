@@ -1,8 +1,0 @@
-postgresqlha:
-  enabled: false
-
-postgresql:
-  enabled: true
-  primary:
-    persistence:
-      enabled: false

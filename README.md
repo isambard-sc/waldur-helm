@@ -39,11 +39,8 @@ on a Kubernetes cluster using the [Helm](https://helm.sh) package manager.
 
    2.2. Advanced setup of dependencies
       Setup database using one of:
-      - Simple PostgreSQL DB: [instructions](docs/postgres-db.md) or
-      - PostgreSQL HA DB: [instructions](docs/postgres-db-ha.md) or
-      - Integrate with external DB: [instructions](docs/external-db-integration.md)
-
-      Install MinIO (for database backups): [instructions](docs/minio.md)
+      - Bundled PostgreSQL subchart: [instructions](docs/postgres-db.md) or
+      - Integrate with external DB or a Postgres operator: [instructions](docs/external-db-integration.md)
 
       Install RabbitMQ for task queue: [instructions](docs/rabbitmq.md)
 
@@ -139,3 +136,29 @@ A secret can be created trough [CLI](https://kubernetes.io/docs/tasks/configure-
 ## Configuration docs
 
 Configuration documentation: [index](docs/index.md)
+
+## Extension hooks
+
+Each application deployment (`api`, `worker`, `beat`, `homeport`) exposes
+Bitnami-style extension hooks so site-specific configuration can be added
+without forking the chart:
+
+- `<component>.extraEnvVars` — extra container env vars
+- `<component>.extraEnvVarsCM` / `<component>.extraEnvVarsSecret` — ConfigMap / Secret as `envFrom`
+- `<component>.extraVolumes` / `<component>.extraVolumeMounts` — extra volumes and mounts
+- `<component>.podAnnotations` / `<component>.podLabels` — extra pod metadata
+
+Two related top-level blocks tune the runtime:
+
+- `gunicorn.*` — `timeout`, `workers`, `maxRequests`, etc. for the API container (renders into `GUNICORN_CMD_ARGS`)
+- `celery.concurrency` — `CELERYD_CONCURRENCY` for worker pods
+
+Cross-cutting ingress annotations (merged onto every rendered Ingress) live under `ingress.annotations`. The canonical use case is controlling DNS TTL via [external-dns](https://github.com/kubernetes-sigs/external-dns):
+
+```yaml
+ingress:
+  annotations:
+    external-dns.alpha.kubernetes.io/ttl: "60"
+```
+
+See [docs/components.md](docs/components.md) for the full reference (section "Tuning and Extension Hooks").

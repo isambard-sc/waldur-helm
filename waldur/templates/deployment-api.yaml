@@ -15,7 +15,10 @@ spec:
       labels:
         app: waldur-mastermind-api
         {{ include "waldur.labels" . | nindent 8 }}
-      {{- with .Values.podAnnotations }}
+        {{- with .Values.api.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.api.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -28,12 +31,16 @@ spec:
       {{ end }}
       {{ if .Values.hostAliases }}
       hostAliases:
-        {{ toYaml .Values.hostaliases | nindent 8 }}
+        {{ toYaml .Values.hostAliases | nindent 8 }}
       {{ end }}
       containers:
         - name: waldur-mastermind-api
+          {{- if .Values.waldur.imageDigest }}
+          image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.imageName }}@{{ .Values.waldur.imageDigest }}
+          {{- else }}
           image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.imageName }}:{{ .Values.waldur.imageTag }}
-          imagePullPolicy: {{ .Values.waldur.pullPolicy }}
+          {{- end }}
+          imagePullPolicy: {{ include "waldur.imagePullPolicy" (dict "tag" .Values.waldur.imageTag "Values" .Values) }}
           args:
             - "mastermind"
           livenessProbe:
@@ -61,13 +68,33 @@ spec:
             - name: GLOBAL_DEBUG
               value: "true"
             {{ end }}
-            {{ if .Values.waldur.openportal.existingSecret.name }}
+            {{- if .Values.waldur.webShell.enabled }}
+            - name: WALDUR_WEB_SHELL_ENABLED
+              value: "true"
+            - name: WALDUR_WEB_SHELL_URL
+              value: {{ .Values.waldur.webShell.url | default (printf "%s://%s/webshell/" .Values.apiScheme .Values.apiHostname) | quote }}
+            {{- end }}
+            {{ if and (hasKey .Values.waldur "openportal") .Values.waldur.openportal.existingSecret.name }}
             - name: OPENPORTAL_CONFIG
               value: "/etc/waldur/openportal/config.toml"
             {{ end }}
-            {{- with .Values.extraEnvVars }}
-            {{- toYaml . | nindent 12 }}
+            {{- $gunicornArgs := include "waldur.gunicornCmdArgs" . }}
+            {{- if $gunicornArgs }}
+            - name: GUNICORN_CMD_ARGS
+              value: {{ $gunicornArgs | quote }}
             {{- end }}
+            {{- if ne (toString .Values.gunicorn.preload) "" }}
+            - name: GUNICORN_PRELOAD
+              value: {{ .Values.gunicorn.preload | quote }}
+            {{- end }}
+            {{- with (include "waldur.extraEnvVars" .Values.api) }}
+            {{- . | nindent 12 }}
+            {{- end }}
+          {{- $envFrom := include "waldur.extraEnvFrom" .Values.api }}
+          {{- if $envFrom }}
+          envFrom:
+            {{- $envFrom | nindent 12 }}
+          {{- end }}
           resources:
             {{ if .Values.hpa.api.enabled }}
             {{- toYaml .Values.hpa.api.resources | nindent 12 }}
@@ -84,9 +111,15 @@ spec:
             - name: config-features-json
               mountPath: /etc/waldur/features.json
               subPath: features.json
+            {{ if and (hasKey .Values.waldur "socialAuthMethodsExistingSecret" ) .Values.waldur.socialAuthMethodsExistingSecret.name }}
+            - name: config-auth-yaml
+              mountPath: /etc/waldur/auth.yaml
+              subPath: {{ .Values.waldur.socialAuthMethodsExistingSecret.key }}
+            {{ else }}
             - name: config-auth-yaml
               mountPath: /etc/waldur/auth.yaml
               subPath: auth.yaml
+            {{ end }}
             - name: config-permissions-override-yaml
               mountPath: /etc/waldur/permissions-override.yaml
               subPath: permissions-override.yaml
@@ -99,7 +132,7 @@ spec:
               mountPath: /etc/waldur/saml2.conf.py
               subPath: saml2.conf.py
             {{ end }}
-            {{ if .Values.waldur.openportal.existingSecret.name }}
+            {{ if and (hasKey .Values.waldur "openportal") .Values.waldur.openportal.existingSecret.name }}
             - name: openportal-config
               mountPath: /etc/waldur/openportal
               readOnly: true
@@ -121,12 +154,12 @@ spec:
             {{ if .Values.waldur.marketplace.script.enabled }}
             - name: waldur-script-kubeconfig
               mountPath: /etc/waldur/kubeconfig
-              subPath: kubeconfig
+              subPath: {{ with (dig "marketplace" "script" "kubeconfigSecret" (dict) .Values.waldur) }}{{ if and (get . "name") (get . "key") }}{{ get . "key" }}{{ else }}kubeconfig{{ end }}{{ else }}kubeconfig{{ end }}
               readOnly: true
             {{ end }}
-            - name: waldur-ssh-signing-key
-              mountPath: /etc/waldur/ssh-signing-key
-              readOnly: true
+            {{- with (include "waldur.extraVolumeMounts" .Values.api) }}
+            {{- . | nindent 12 }}
+            {{- end }}
       volumes:
       - name: api-override
         configMap:
@@ -137,9 +170,15 @@ spec:
       - name: config-features-json
         configMap:
           name: mastermind-config-features-json
+      {{ if and (hasKey .Values.waldur "socialAuthMethodsExistingSecret" ) .Values.waldur.socialAuthMethodsExistingSecret.name }}
+      - name: config-auth-yaml
+        secret:
+          secretName: {{ .Values.waldur.socialAuthMethodsExistingSecret.name }}
+      {{ else }}
       - name: config-auth-yaml
         configMap:
           name: mastermind-config-auth-yaml
+      {{ end }}
       - name: config-permissions-override-yaml
         configMap:
           name: mastermind-config-permissions-override-yaml
@@ -154,7 +193,7 @@ spec:
         configMap:
           name: waldur-saml2-conf-config
       {{ end }}
-      {{ if .Values.waldur.openportal.existingSecret.name }}
+      {{ if and (hasKey .Values.waldur "openportal") .Values.waldur.openportal.existingSecret.name }}
       - name: openportal-config
         secret:
           secretName: {{ .Values.waldur.openportal.existingSecret.name }}
@@ -177,11 +216,11 @@ spec:
       {{ if .Values.waldur.marketplace.script.enabled }}
       - name: waldur-script-kubeconfig
         secret:
-          secretName: waldur-script-kubeconfig
+          secretName: {{ with (dig "marketplace" "script" "kubeconfigSecret" (dict) .Values.waldur) }}{{ if and (get . "name") (get . "key") }}{{ get . "name" }}{{ else }}waldur-script-kubeconfig{{ end }}{{ else }}waldur-script-kubeconfig{{ end }}
       {{ end }}
-      - name: waldur-ssh-signing-key
-        secret:
-          secretName: waldur-ssh-signing-key
+      {{- with (include "waldur.extraVolumes" .Values.api) }}
+      {{- . | nindent 6 }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

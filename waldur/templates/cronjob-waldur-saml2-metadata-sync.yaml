@@ -17,8 +17,12 @@ spec:
         spec:
           containers:
           - name: waldur-saml2-metadata-sync
+            {{- if .Values.waldur.imageDigest }}
+            image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.imageName }}@{{ .Values.waldur.imageDigest }}
+            {{- else }}
             image: {{ .Values.global.imageRegistry }}/{{ .Values.waldur.imageName }}:{{ .Values.waldur.imageTag }}
-            imagePullPolicy: {{ .Values.waldur.pullPolicy }}
+            {{- end }}
+            imagePullPolicy: {{ include "waldur.imagePullPolicy" (dict "tag" .Values.waldur.imageTag "Values" .Values) }}
             args:
               - saml2-metadata-sync
             env:

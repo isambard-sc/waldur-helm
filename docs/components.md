@@ -85,12 +85,17 @@ graph TB
 **Enabled by:** `waldur.metricsExporter.enabled`
 
 - **Responsibilities:**
+
   - Exposes Waldur metrics in Prometheus format
+
   - Provides monitoring data
+
   - Integrates with monitoring stack
 
 - **Configuration:**
+
   - Requires API token for authentication
+
   - Exposes metrics on port 8080
 
 ### 6. UVK Everypay Integration
@@ -100,52 +105,69 @@ graph TB
 **Enabled by:** `waldur.uvkEverypay.enabled`
 
 - **Components:**
+
   - Main container: UVK payment processor
+
   - Sidecar container: HTTP API bridge
 
 - **Responsibilities:**
+
   - Processes payments through Everypay
+
   - Integrates with Azure AD
+
   - Handles payment notifications
+
   - Email notifications for transactions
 
 ## Dependencies
 
 ### PostgreSQL Database
 
-**Chart:** Bitnami PostgreSQL v16.7.26
+**Chart:** CloudPirates `postgres` (bundled subchart, `postgresql.enabled`)
 **Enabled by:** `postgresql.enabled`
-**Images:** Uses `bitnamilegacy` Docker images for compatibility
+**Images:** Official upstream images (`docker.io/postgres`, `docker.io/rabbitmq`)
 **Environment:** Demo/Development only
 
 ⚠️ **Production Recommendation:** Use [CloudNativePG Operator](postgres-operator.md) for production deployments
 
 - **Options:**
+
   - Simple PostgreSQL deployment
-  - PostgreSQL HA deployment (using `postgresqlha.enabled`)
+
   - External database configuration
+
   - **Production:** CloudNativePG operator with automated failover
 
 - **Purpose:**
+
   - Primary data storage
+
   - User accounts and permissions
+
   - Resource state management
+
   - Billing and accounting data
+
   - Audit logs
 
 ### RabbitMQ Message Broker
 
-**Chart:** Bitnami RabbitMQ v16.0.13
+**Chart:** CloudPirates `rabbitmq` (bundled subchart, `rabbitmq.enabled`)
 **Enabled by:** `rabbitmq.enabled`
-**Images:** Uses `bitnamilegacy` Docker images for compatibility
+**Images:** Official upstream images (`docker.io/postgres`, `docker.io/rabbitmq`)
 **Environment:** Demo/Development only
 
 ⚠️ **Production Recommendation:** Use [RabbitMQ Cluster Operator](rabbitmq-operator.md) for production deployments
 
 - **Purpose:**
+
   - Message queue for Celery
+
   - Task distribution to workers
+
   - Asynchronous communication
+
   - Event-driven architecture support
 
 ## Scheduled Tasks (CronJobs)
@@ -183,7 +205,9 @@ graph LR
 **Schedule:** Daily (configurable)
 
 - Creates PostgreSQL dumps
+
 - Uploads to object storage
+
 - Configurable retention
 
 ### Backup Rotation
@@ -192,7 +216,9 @@ graph LR
 **Schedule:** Weekly (configurable)
 
 - Manages backup retention
+
 - Removes old backups
+
 - Maintains backup history
 
 ### Session Cleanup
@@ -201,7 +227,9 @@ graph LR
 **Schedule:** Daily
 
 - Cleans expired sessions
+
 - Removes old audit logs
+
 - Database maintenance tasks
 
 ### SAML2 Metadata Sync
@@ -210,7 +238,9 @@ graph LR
 **Schedule:** Configurable
 
 - Synchronizes SAML2 metadata
+
 - Updates identity provider configurations
+
 - Maintains SSO configurations
 
 ## Data Flow
@@ -244,14 +274,19 @@ sequenceDiagram
 ### Internal Services
 
 - **waldur-mastermind-api:** ClusterIP service on port 80
+
 - **waldur-homeport:** ClusterIP service on port 80
+
 - **waldur-metrics-exporter:** ClusterIP service on port 8080
+
 - **waldur-uvk-everypay:** ClusterIP service on port 8000
 
 ### External Access
 
 - Ingress controller routes traffic to services
+
 - TLS termination at ingress level
+
 - Support for multiple hostnames per service
 
 ## Configuration Management
@@ -259,42 +294,213 @@ sequenceDiagram
 ### ConfigMaps
 
 - **api-override-config:** Django settings overrides
+
 - **api-celery-config:** Celery configuration
+
 - **mastermind-config-features-json:** Feature flags
+
 - **mastermind-config-auth-yaml:** Authentication settings
+
 - **mastermind-config-permissions-override-yaml:** Permission overrides
+
+- **mastermind-config-custom-roles-yaml:** Custom (non-built-in) role definitions
+
 - **icons-config:** Custom icons and branding
 
 ### Secrets
 
 - **waldur-secret:** Database credentials, API tokens
+
 - **waldur-saml2-secret:** SAML2 certificates
+
 - **waldur-valimo-secret:** Valimo authentication certificates
+
 - **waldur-ssh-key-config:** SSH private keys
+
 - **waldur-script-kubeconfig:** Kubernetes config for script execution
+
+### Field encryption
+
+Secret DB columns are encrypted at rest with Fernet: resource API keys, service
+settings credentials (`password`, `token`, and the credential values inside
+`options`), and offering secret options. The key comes from
+`waldur.fieldEncryptionKey`, injected into every mastermind pod as
+`FIELD_ENCRYPTION_KEY` via a secret reference — it is never rendered into a
+ConfigMap or pod spec.
+
+Leaving it empty is supported but not advisable in production: mastermind then
+derives the key from `waldur.secretKey` and logs a warning at startup. That
+leaves every backend credential in the deployment protected by a value that
+lives in plaintext in `values.yaml` and is commonly shared or committed, which
+is the separation this key exists to provide. Set a dedicated one:
+
+```yaml
+waldur:
+  fieldEncryptionKey: "<output of Fernet.generate_key()>"
+  # or point at a secret you manage yourself:
+  fieldEncryptionKeyExistingSecret:
+    name: my-vault-secret
+    key: fernet-key
+```
+
+Back the key up separately from the database and at least as carefully: a
+database backup without it is unreadable for these columns, and losing it loses
+the data they hold.
+
+To rotate the key without downtime, promote a new one and keep the previous
+key(s) readable through `waldur.fieldEncryptionKeyFallbacks`. Decryption is
+attempted against the primary and every fallback; only the primary is used for
+new writes:
+
+```yaml
+waldur:
+  fieldEncryptionKey: "<new key>"
+  fieldEncryptionKeyFallbacks:
+    - "<previous key>"
+```
+
+Then re-encrypt every stored row under the new primary, from any mastermind pod:
+
+```bash
+kubectl exec -it deploy/waldur-mastermind-api -- waldur reencrypt_fields
+```
+
+Only once that reports every row rotated is the old key safe to remove from
+`fieldEncryptionKeyFallbacks`. **Do not wait for rows to re-encrypt themselves.**
+A value is only rewritten when something happens to rewrite it, so there is no
+point at which you could tell the old key had become unnecessary — dropping it
+early makes every row still holding it unrecoverable.
+
+`waldur reencrypt_fields --dry-run` reports the same counts without writing, and
+in particular how many rows *no* configured key can decrypt. Worth running on its
+own: such rows are invisible until something tries to read them.
+
+A deployment that started without a dedicated key can adopt one at any time —
+the `secretKey`-derived key stays an implicit last-resort fallback, so rows
+written before the switch keep decrypting with no fallback entry needed.
 
 ## High Availability Considerations
 
 1. **API Layer:**
-  - Supports multiple replicas
-  - Horizontal Pod Autoscaling available
-  - Load balanced through service
 
-2. **Worker Layer:**
-  - Horizontally scalable
-  - Multiple workers can process tasks in parallel
-  - HPA support for automatic scaling
+- Supports multiple replicas
+- Horizontal Pod Autoscaling available
+- Load balanced through service
 
-3. **Beat Scheduler:**
-  - Single instance only (by design)
-  - Handles scheduling, not processing
+1. **Worker Layer:**
 
-4. **Database:**
-  - PostgreSQL HA option available
-  - Supports external managed databases
-  - Regular backup strategy
+- Horizontally scalable
+- Multiple workers can process tasks in parallel
+- HPA support for automatic scaling
 
-5. **Message Queue:**
-  - RabbitMQ clustering supported
-  - External message broker option
+1. **Beat Scheduler:**
 
+- Single instance only (by design)
+- Handles scheduling, not processing
+
+1. **Database:**
+
+- PostgreSQL HA option available
+- Supports external managed databases
+- Regular backup strategy
+
+1. **Message Queue:**
+
+- RabbitMQ clustering supported
+- External message broker option
+
+## Tuning and Extension Hooks
+
+The chart exposes Bitnami-style extension hooks on the `api`, `worker`, `beat`, and `homeport` deployments so operators can inject site-specific configuration without forking. All defaults are empty — the rendered output is unchanged when the values are not set.
+
+### Per-deployment hooks
+
+Available on each of `api`, `worker`, `beat`, `homeport`:
+
+| Value | Type | Purpose |
+|---|---|---|
+| `<component>.extraEnvVars` | list of EnvVar | Extra container env vars (supports `value` and `valueFrom`) |
+| `<component>.extraEnvVarsCM` | string | Single ConfigMap name, rendered as `envFrom.configMapRef` |
+| `<component>.extraEnvVarsSecret` | string | Single Secret name, rendered as `envFrom.secretRef` |
+| `<component>.extraVolumes` | list of Volume | Extra volumes appended to the pod spec |
+| `<component>.extraVolumeMounts` | list of VolumeMount | Extra mounts appended to the main container |
+| `<component>.podAnnotations` | object | Merged onto the pod template metadata |
+| `<component>.podLabels` | object | Merged onto the pod template metadata |
+
+For `beat`, hooks affect only the main beat container — the migration / DB-bootstrap init containers are left untouched.
+
+Example: scrape the API pod with Prometheus and mount a shared scratch PVC.
+
+```yaml
+api:
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+  extraVolumes:
+    - name: scratch
+      persistentVolumeClaim:
+        claimName: waldur-api-scratch
+  extraVolumeMounts:
+    - name: scratch
+      mountPath: /scratch
+```
+
+### Gunicorn process tuning (api only)
+
+The `gunicorn:` block translates into a `GUNICORN_CMD_ARGS` env var on the api container; gunicorn reads it at startup and appends it to its own argv. Any value left empty falls back to the gunicorn defaults baked into the image (`/etc/waldur/gunicorn.conf.py`).
+
+```yaml
+gunicorn:
+  timeout: 120           # --timeout
+  gracefulTimeout: 60    # --graceful-timeout
+  workers: 6             # --workers
+  keepalive: 5           # --keep-alive
+  maxRequests: 1000      # --max-requests (recycle worker after N requests)
+  maxRequestsJitter: 50  # --max-requests-jitter
+  extraArgs: ""          # raw passthrough appended verbatim
+```
+
+### Celery worker concurrency
+
+```yaml
+celery:
+  concurrency: 32        # CELERYD_CONCURRENCY (default 10)
+```
+
+This sets the number of child processes per worker pod. Combine with `replicaCount.worker` (and HPA, if enabled) to scale total parallelism. Note: increasing `concurrency` raises per-pod memory; size `workerResources` accordingly.
+
+### Memory tuning
+
+The mastermind image already ships two memory optimisations enabled by default, so the lower footprint applies without any chart change:
+
+- **gunicorn preload** — the API master imports the application once and forks workers, which then share that import footprint copy-on-write instead of each holding a private copy. This is the dominant saving for the API pod.
+- **jemalloc** — preloaded via `LD_PRELOAD` in the image to curb allocator fragmentation in long-running prefork workers.
+
+Two values let operators retune:
+
+```yaml
+gunicorn:
+  preload: "false"         # GUNICORN_PRELOAD; disable preloading (default: enabled in the image)
+celery:
+  maxMemoryPerChild: 400000  # CELERY_WORKER_MAX_MEMORY_PER_CHILD (KB): recycle a child once it exceeds this
+```
+
+`gunicorn.preload` renders the `GUNICORN_PRELOAD` env var on the api pod; leave it empty to keep the image default (enabled). `celery.maxMemoryPerChild` renders `CELERY_WORKER_MAX_MEMORY_PER_CHILD` on the worker pod — a hard per-child ceiling that recycles a child once it crosses the limit; empty or `0` disables it (the default).
+
+### Ingress annotations
+
+`ingress.annotations` is a free-form map merged onto **every** ingress this chart renders — `api`, `api-admin`, `homeport`, `rmq-ws`, and `uvk-everypay`. It sits alongside the className-specific annotations the chart already templates (nginx, haproxy, traefik, openshift-default) and the cert-manager `cluster-issuer` annotation; ingress-controller and cert-manager keys should stay in their own values so they keep their conditional logic.
+
+The canonical use case is [external-dns](https://github.com/kubernetes-sigs/external-dns), which reads annotations on Ingress objects to manage DNS records:
+
+```yaml
+ingress:
+  annotations:
+    external-dns.alpha.kubernetes.io/ttl: "60"           # low TTL for fast cut-over during deploys
+    external-dns.alpha.kubernetes.io/hostname: "api.example.com"
+    external-dns.alpha.kubernetes.io/cloudflare-proxied: "false"
+```
+
+A 60-second TTL is a common operator choice for production rollouts: short enough that resolvers pick up an IP change within a minute, long enough to avoid hammering the upstream DNS provider during steady state. The external-dns default is 300 seconds; set it explicitly per environment.
+
+All values must be strings (Kubernetes annotation requirement) — quote numeric and boolean values. Leaving the map empty (the default) keeps the rendered ingresses byte-identical to the baseline chart.

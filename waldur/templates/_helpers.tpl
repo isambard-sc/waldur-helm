@@ -57,8 +57,6 @@ Set postgres host
 {{- define "waldur.postgresql.host" -}}
 {{- if .Values.externalDB.enabled -}}
 {{ .Values.externalDB.serviceName }}
-{{- else if .Values.postgresqlha.enabled -}}
-"{{ .Release.Name }}-postgresqlha-pgpool"
 {{- else if .Values.postgresql.enabled -}}
 "{{ .Release.Name }}-postgresql"
 {{- else -}}
@@ -79,8 +77,6 @@ Set postgres secret
 {{- define "waldur.postgresql.secret" -}}
 {{- if .Values.externalDB.enabled -}}
 {{ .Values.externalDB.secretName }}
-{{- else if .Values.postgresqlha.enabled -}}
-"{{ .Release.Name }}-postgresqlha-postgresql"
 {{- else if .Values.postgresql.enabled -}}
 "{{ .Release.Name }}-postgresql"
 {{- else -}}
@@ -89,20 +85,31 @@ Set postgres secret
 {{- end -}}
 
 {{/*
-Set postgres secret password key
+Set postgres secret password key.
+
+The bundled subchart generates its admin secret with the key
+"postgres-password". Operator-managed secrets differ: both CloudNativePG's
+<cluster>-app secret and Zalando's *.credentials.postgresql.acid.zalan.do use
+"password", which is the default for externalDB.passwordKey.
 */}}
 {{- define "waldur.postgresql.secret.passwordKey" -}}
+{{- if .Values.externalDB.enabled -}}
+{{ .Values.externalDB.passwordKey | default "password" | quote }}
+{{- else if .Values.postgresql.enabled -}}
+"postgres-password"
+{{- else -}}
 "password"
+{{- end -}}
 {{- end -}}
 
 {{/*
 Set postgres database name
 */}}
 {{- define "waldur.postgresql.dbname" -}}
-{{- if .Values.postgresqlha.enabled -}}
-{{ .Values.postgresqlha.postgresql.database | quote }}
-{{- else if .Values.postgresql.enabled -}}
+{{- if .Values.postgresql.enabled -}}
 {{ .Values.postgresql.auth.database | quote }}
+{{- else if and .Values.externalDB.enabled .Values.externalDB.database -}}
+{{ .Values.externalDB.database | quote }}
 {{- else -}}
 "waldur"
 {{- end -}}
@@ -112,10 +119,10 @@ Set postgres database name
 Set postgres user
 */}}
 {{- define "waldur.postgresql.user" -}}
-{{- if .Values.postgresqlha.enabled -}}
-{{ .Values.postgresqlha.postgresql.username | quote }}
-{{- else if .Values.postgresql.enabled -}}
+{{- if .Values.postgresql.enabled -}}
 {{ .Values.postgresql.auth.username | quote }}
+{{- else if and .Values.externalDB.enabled .Values.externalDB.username -}}
+{{ .Values.externalDB.username | quote }}
 {{- else -}}
 "waldur"
 {{- end -}}
@@ -134,6 +141,144 @@ Set rabbitmq host
 {{ $rmqHost }}
 {{- end -}}
 
+
+{{/*
+Render a component's extraEnvVars list.
+Usage: {{- include "waldur.extraEnvVars" .Values.api | nindent 12 }}
+*/}}
+{{- define "waldur.extraEnvVars" -}}
+{{- with .extraEnvVars -}}
+{{ toYaml . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Render a component's envFrom entries from extraEnvVarsCM / extraEnvVarsSecret.
+Skip the call site's envFrom: block entirely when both are empty.
+Usage:
+  {{- $envFrom := include "waldur.extraEnvFrom" .Values.api -}}
+  {{- if $envFrom }}
+  envFrom:
+  {{- $envFrom | nindent 12 }}
+  {{- end }}
+*/}}
+{{- define "waldur.extraEnvFrom" -}}
+{{- if .extraEnvVarsCM }}
+- configMapRef:
+    name: {{ .extraEnvVarsCM }}
+{{- end }}
+{{- if .extraEnvVarsSecret }}
+- secretRef:
+    name: {{ .extraEnvVarsSecret }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Render a component's extraVolumes list.
+Usage: {{- include "waldur.extraVolumes" .Values.api | nindent 6 }}
+*/}}
+{{- define "waldur.extraVolumes" -}}
+{{- with .extraVolumes -}}
+{{ toYaml . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Render a component's extraVolumeMounts list.
+Usage: {{- include "waldur.extraVolumeMounts" .Values.api | nindent 12 }}
+*/}}
+{{- define "waldur.extraVolumeMounts" -}}
+{{- with .extraVolumeMounts -}}
+{{ toYaml . }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Render .Values.ingress.annotations as YAML key/value pairs, already indented
+to sit inside an Ingress metadata.annotations block. Emits nothing when the
+map is empty so the baseline render stays byte-identical.
+Used by every ingress template so operators can add cross-cutting annotations
+(e.g. external-dns.alpha.kubernetes.io/ttl: "60") without forking the chart.
+Usage: {{- include "waldur.ingressAnnotations" . }}
+*/}}
+{{- define "waldur.ingressAnnotations" -}}
+{{- with .Values.ingress.annotations -}}
+{{- toYaml . | nindent 4 -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Fail fast when gatewayAPI.enabled but the target cluster doesn't advertise the
+Gateway API CRDs -- a clearer error than the apiserver's own "no matches for
+kind HTTPRoute" during apply. Against a real cluster, .Capabilities.APIVersions
+reflects what's actually installed; `helm template`/`helm lint` need an
+explicit `--api-versions gateway.networking.k8s.io/v1/HTTPRoute` to simulate
+that (see waldur/test/values-gateway.yaml usage in .gitlab-ci.yml).
+Usage: {{- include "waldur.gatewayAPI.assertAvailable" . }}
+*/}}
+{{- define "waldur.gatewayAPI.assertAvailable" -}}
+{{- if not (.Capabilities.APIVersions.Has "gateway.networking.k8s.io/v1/HTTPRoute") -}}
+{{- fail "gatewayAPI.enabled is true, but the Gateway API CRDs (gateway.networking.k8s.io/v1) are not installed on the target cluster. Install them first: https://gateway-api.sigs.k8s.io/guides/#installing-gateway-api" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Render the parentRefs list for a chart-managed HTTPRoute: the chart's own
+Gateway when gatewayAPI.createGateway is true, otherwise the operator-supplied
+gatewayAPI.parentRefs (required non-empty in that case -- an HTTPRoute with no
+parentRefs never attaches anywhere).
+Usage:
+  spec:
+    parentRefs:
+      {{- include "waldur.gatewayAPI.parentRefs" . | nindent 4 }}
+*/}}
+{{- define "waldur.gatewayAPI.parentRefs" -}}
+{{- if .Values.gatewayAPI.createGateway -}}
+- name: {{ include "waldur.fullname" . }}-gateway
+{{- else if .Values.gatewayAPI.parentRefs -}}
+{{- toYaml .Values.gatewayAPI.parentRefs -}}
+{{- else -}}
+{{- fail "gatewayAPI.enabled is true, but neither gatewayAPI.parentRefs nor gatewayAPI.createGateway is set -- HTTPRoutes need a Gateway to attach to." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Render .Values.gatewayAPI.annotations as YAML, for callers to nindent under
+their own metadata.annotations. Emits nothing when the map is empty -- guard
+with `if .Values.gatewayAPI.annotations` at the call site so an empty map
+doesn't leave a dangling "annotations:" key.
+Usage:
+  {{- if .Values.gatewayAPI.annotations }}
+  annotations:
+    {{- include "waldur.gatewayAPI.annotations" . | nindent 4 }}
+  {{- end }}
+*/}}
+{{- define "waldur.gatewayAPI.annotations" -}}
+{{- toYaml .Values.gatewayAPI.annotations -}}
+{{- end -}}
+
+{{/*
+Assemble GUNICORN_CMD_ARGS value from .Values.gunicorn.*. Returns empty when no field is set.
+Usage:
+  {{- $gun := include "waldur.gunicornCmdArgs" . -}}
+  {{- if $gun }}
+  - name: GUNICORN_CMD_ARGS
+    value: {{ $gun | quote }}
+  {{- end }}
+*/}}
+{{- define "waldur.gunicornCmdArgs" -}}
+{{- $parts := list -}}
+{{- with .Values.gunicorn -}}
+{{- if .timeout }}{{- $parts = append $parts (printf "--timeout %v" .timeout) -}}{{- end -}}
+{{- if .gracefulTimeout }}{{- $parts = append $parts (printf "--graceful-timeout %v" .gracefulTimeout) -}}{{- end -}}
+{{- if .workers }}{{- $parts = append $parts (printf "--workers %v" .workers) -}}{{- end -}}
+{{- if .keepalive }}{{- $parts = append $parts (printf "--keep-alive %v" .keepalive) -}}{{- end -}}
+{{- if .maxRequests }}{{- $parts = append $parts (printf "--max-requests %v" .maxRequests) -}}{{- end -}}
+{{- if .maxRequestsJitter }}{{- $parts = append $parts (printf "--max-requests-jitter %v" .maxRequestsJitter) -}}{{- end -}}
+{{- if .extraArgs }}{{- $parts = append $parts .extraArgs -}}{{- end -}}
+{{- end -}}
+{{- join " " $parts -}}
+{{- end -}}
 
 {{/*
 Add environment variables to configure private database
@@ -168,6 +313,27 @@ Add environment variables to configure database values and Sentry environment
       name: {{ .Values.waldur.secretKeyExistingSecret.name | default "waldur-secret" }}
       key: {{ .Values.waldur.secretKeyExistingSecret.key | default "GLOBAL_SECRET_KEY" }}
 
+{{ if or .Values.waldur.fieldEncryptionKey .Values.waldur.fieldEncryptionKeyExistingSecret.name }}
+- name: FIELD_ENCRYPTION_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.fieldEncryptionKeyExistingSecret.name | default "waldur-secret" }}
+      key: {{ .Values.waldur.fieldEncryptionKeyExistingSecret.key | default "FIELD_ENCRYPTION_KEY" }}
+{{ end }}
+
+{{ if or .Values.waldur.fieldEncryptionKeyFallbacks .Values.waldur.fieldEncryptionKeyFallbacksExistingSecret.name }}
+- name: FIELD_ENCRYPTION_KEY_FALLBACKS
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.waldur.fieldEncryptionKeyFallbacksExistingSecret.name | default "waldur-secret" }}
+      key: {{ .Values.waldur.fieldEncryptionKeyFallbacksExistingSecret.key | default "FIELD_ENCRYPTION_KEY_FALLBACKS" }}
+{{ end }}
+
+{{ if not .Values.waldur.telemetry.enabled }}
+- name: WALDUR_TELEMETRY_ENABLED
+  value: "false"
+{{ end }}
+
 - name: POSTGRESQL_HOST
   value: {{ include "waldur.postgresql.host" . }}
 
@@ -175,7 +341,7 @@ Add environment variables to configure database values and Sentry environment
   value: {{ include "waldur.postgresql.port" . }}
 
 - name: POSTGRESQL_USER
-{{ if and .Values.externalDB.enabled (eq .Values.externalDB.flavor "zalando") }}
+{{ if and .Values.externalDB.enabled (not .Values.externalDB.username) }}
   valueFrom:
     secretKeyRef:
       name: {{ include "waldur.postgresql.secret" . }}
@@ -205,7 +371,12 @@ Add environment variables to configure database values and Sentry environment
   {{ end }}
 
 - name: POSTGRESQL_READONLY_PASSWORD
-  {{ if .Values.readonlyDB.password }}
+  {{ if .Values.readonlyDB.passwordExistingSecret.name }}
+  valueFrom:
+    secretKeyRef:
+      name: {{ .Values.readonlyDB.passwordExistingSecret.name }}
+      key: {{ .Values.readonlyDB.passwordExistingSecret.key | default "READONLY_DB_PASSWORD" }}
+  {{ else if .Values.readonlyDB.password }}
   valueFrom:
     secretKeyRef:
       name: waldur-secret
@@ -218,17 +389,32 @@ Add environment variables to configure database values and Sentry environment
   {{ end }}
 {{ end }}
 
+{{/*
+SMTP credentials. Emitted per key rather than as a pair: secrets.yaml writes MAIL_USER and
+MAIL_PASSWORD under independent conditions, so a username configured without a password used to
+leave EMAIL_PASSWORD pointing at a key that does not exist, and every pod including this helper
+failed with CreateContainerConfigError. That is what previously took this block out of service.
+optional: true keeps the same shape safe when an operator-supplied existingSecret carries only
+one of the two keys — the variable is simply absent and the SMTP session stays anonymous, which
+is the behaviour of an unconfigured relay rather than a crash loop.
+*/}}
+{{ if or .Values.waldur.mail.existingSecret.name .Values.waldur.mail.username }}
 - name: EMAIL_USER
   valueFrom:
     secretKeyRef:
       name: {{ .Values.waldur.mail.existingSecret.name | default "waldur-secret" }}
       key: {{ .Values.waldur.mail.existingSecret.userKey | default "MAIL_USER" }}
+      optional: true
+{{ end }}
 
+{{ if or .Values.waldur.mail.existingSecret.name .Values.waldur.mail.password }}
 - name: EMAIL_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ .Values.waldur.mail.existingSecret.name | default "waldur-secret"}}
-      key: {{ .Values.waldur.mail.existingSecret.passwordKey | default "MAIL_PASSWORD"}}
+      name: {{ .Values.waldur.mail.existingSecret.name | default "waldur-secret" }}
+      key: {{ .Values.waldur.mail.existingSecret.passwordKey | default "MAIL_PASSWORD" }}
+      optional: true
+{{ end }}
 
 - name: RABBITMQ_HOSTNAME
   value: {{ include "waldur.rabbitmq.rmqHost" . | quote }}
@@ -238,7 +424,7 @@ Add environment variables to configure database values and Sentry environment
     secretKeyRef:
       name: {{ .Values.rabbitmq.secret.name }}
       key: {{ .Values.rabbitmq.secret.usernameKey }}
-  {{ else if and (hasKey .Values.rabbitmq.auth "existingSecret") .Values.rabbitmq.auth.existingSecret.name }}
+  {{ else if and (kindIs "map" .Values.rabbitmq.auth.existingSecret) .Values.rabbitmq.auth.existingSecret.name }}
   valueFrom:
     secretKeyRef:
       name: {{ .Values.rabbitmq.auth.existingSecret.name }}
@@ -255,7 +441,7 @@ Add environment variables to configure database values and Sentry environment
     secretKeyRef:
       name: {{ .Values.rabbitmq.secret.name }}
       key: {{ .Values.rabbitmq.secret.passwordKey }}
-  {{ else if and (hasKey .Values.rabbitmq.auth "existingSecret") .Values.rabbitmq.auth.existingSecret.name }}
+  {{ else if and (kindIs "map" .Values.rabbitmq.auth.existingSecret) .Values.rabbitmq.auth.existingSecret.name }}
   valueFrom:
     secretKeyRef:
       name: {{ .Values.rabbitmq.auth.existingSecret.name }}
@@ -328,12 +514,19 @@ Add environment variables to configure database values and Sentry environment
       key: {{ .Values.waldur.ldap.passwordExistingSecret.key }}
 {{- end -}}
 
-{{- if .Values.waldur.freeipa.passwordExistingSecret.name -}}
-- name: FREEIPA_PASSWORD
+{{- $pidDatacitePasswordSecret := dig "pid_datacite" "passwordSecret" (dict) .Values.waldur -}}
+{{- if and (get $pidDatacitePasswordSecret "name") (get $pidDatacitePasswordSecret "key") }}
+- name: DATACITE_PASSWORD
   valueFrom:
     secretKeyRef:
-      name: {{ .Values.waldur.freeipa.passwordExistingSecret.name }}
-      key: {{ .Values.waldur.freeipa.passwordExistingSecret.key }}
+      name: {{ get $pidDatacitePasswordSecret "name" }}
+      key: {{ get $pidDatacitePasswordSecret "key" }}
+{{- else if .Values.waldur.pid_datacite.password }}
+- name: DATACITE_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: waldur-secret
+      key: DATACITE_PASSWORD
 {{- end -}}
 
 {{- if .Values.waldur.paypal.existingSecret.name -}}
@@ -358,4 +551,99 @@ Add environment variables to configure database values and Sentry environment
 - name: no_proxy
   value: {{ .Values.proxy.noProxy | quote }}
 {{ end }}
+{{- end -}}
+
+{{/*
+Determine imagePullPolicy based on image tag.
+If tag is "latest", use "Always", otherwise use configured pullPolicy.
+*/}}
+{{- define "waldur.imagePullPolicy" -}}
+{{- $tag := .tag -}}
+{{- if eq $tag "latest" -}}
+Always
+{{- else -}}
+{{ .Values.waldur.pullPolicy }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Determine imagePullPolicy based on full image string (image:tag).
+If tag is "latest", use "Always", otherwise use configured pullPolicy.
+*/}}
+{{- define "waldur.imagePullPolicyFromImage" -}}
+{{- $image := .image -}}
+{{- $parts := splitList ":" $image -}}
+{{- $tag := "latest" -}}
+{{- if gt (len $parts) 1 -}}
+{{- $tag = last $parts -}}
+{{- end -}}
+{{- if eq $tag "latest" -}}
+Always
+{{- else -}}
+{{ .Values.waldur.pullPolicy }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Service IP family policy.
+
+PreferDualStack so a Service gets a ClusterIP in every family the cluster
+supports, and silently falls back to the single available family on an
+IPv4-only or IPv6-only cluster — no per-cluster values needed. Without it
+Services default to SingleStack on the cluster's *primary* family, so on a
+dual-stack cluster IPv6 clients cannot reach them at all.
+
+Deliberately not applied to the livekit-rtc LoadBalancer: dual-stack load
+balancer support varies by cloud provider, and its media path is pinned to an
+explicit node/external IP anyway.
+*/}}
+{{- define "waldur.serviceIpFamilyPolicy" -}}
+ipFamilyPolicy: PreferDualStack
+{{- end -}}
+
+{{/*
+Whether an ingress should redirect http -> https.
+
+Takes a dict of "scheme" (the apiScheme / homeportScheme this ingress serves)
+and "Values". Returns the string "true" or "false", so it can be used both as
+an annotation value and in an `if`.
+
+Redirecting is correct in exactly two cases:
+
+  * the chart terminates TLS itself (`ingress.tls.enabled`), or
+  * TLS is terminated upstream by a load balancer and the deployment is still
+    addressed as https (`apiScheme` / `homeportScheme` set to https while
+    `ingress.tls.enabled` stays false).
+
+Redirecting unconditionally — which is what every ingress did before — breaks
+the third case: a plain-http deployment (`ingress.tls.enabled: false` with both
+schemes left at their "http" default) got a 301 to a scheme the chart had not
+configured a certificate for, so homeport ended up on https while the API_URL
+baked into its pod stayed http and the SPA could not bootstrap.
+*/}}
+{{- define "waldur.sslRedirect" -}}
+{{- if or .Values.ingress.tls.enabled (eq .scheme "https") -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether the traefik matrix-chain middleware has any member.
+
+Unlike every other chain in the chart, matrix-chain's members are *all*
+optional — the https redirect and the IP allow list, nothing else (the
+homeserver, lk-jwt and LiveKit emit their own CORS headers, so no header
+middleware is attached). Once the redirect became conditional, a plain-http
+deployment with no whitelistSourceRange would render `middlewares:` with an
+empty list, which Traefik rejects. So the chain object and the ingress
+annotation that references it are both gated on this.
+*/}}
+{{- define "waldur.matrixChainEnabled" -}}
+{{- if or (eq (include "waldur.sslRedirect" (dict "scheme" .Values.apiScheme "Values" .Values)) "true") .Values.ingress.whitelistSourceRange -}}
+true
+{{- else -}}
+false
+{{- end -}}
 {{- end -}}
