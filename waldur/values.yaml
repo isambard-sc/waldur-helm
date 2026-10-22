@@ -251,20 +251,24 @@ hostAliases: []
 waldur:
   imageName: "opennode/waldur-mastermind"
   imageDigest: ""  # Optional: if set, uses the unique docker image hash, priority over tag
-  imageTag: "8.1.3-rc.21"
+  imageTag: "8.1.3"
   initdbEnabled: true
-  # How long the whitelabeling hook waits for the schema before giving up, in
-  # seconds. It cannot start until migrations are done -- they run in the beat
-  # pod's initContainer, which helm does not sequence this hook behind -- so on
-  # a first install this has to cover the entire migration run from an empty
+  # How long API, worker, and the whitelabeling hook wait for the schema before
+  # giving up, in seconds. Migrations run in the beat pod's initContainer
+  # (args: initdb). Nothing sequences that pod ahead of the API or worker, so
+  # those pods poll `waldur migrate --check` and stay unready until it exits 0.
+  # On a first install this has to cover the entire migration run from an empty
   # database, which is the slowest thing the chart does.
   #
   # 45 minutes is deliberately generous. The cost of overshooting is that a
   # genuinely stuck install takes longer to report failure; the cost of
-  # undershooting is a failed hook on a slow or contended cluster, which is the
-  # exact failure this wait exists to prevent. A from-empty migration run
-  # measured 834s on a small kind node, so this is roughly three times the
-  # observed need. The hook fails with the reason rather than hanging forever.
+  # undershooting is new pods failing their init while beat is still migrating,
+  # which is the exact failure this wait exists to prevent. A from-empty
+  # migration run measured 834s on a small kind node, so this is roughly three
+  # times the observed need. The init container fails with the reason rather
+  # than hanging forever. API, worker, and beat progressDeadlineSeconds are
+  # this value plus 10 minutes, so a rollout is not marked stalled while the
+  # wait is still inside its budget.
   initdbWaitTimeout: 2700
   initdbImageName: "library/postgres"
   pullPolicy: IfNotPresent
@@ -578,7 +582,10 @@ waldur:
     existingSecret:
       name: ""
   support:
-    backend: "zammad" # Can be "atlassian", "zammad" or "smax"
+    # "basic" is the built-in service desk: tickets stay in Waldur and need no
+    # external system. "atlassian", "zammad" and "smax" sync tickets to that
+    # service desk and need its settings below.
+    backend: "basic"
     existingSecret:
       name: ""
     atlassian:
@@ -721,6 +728,16 @@ waldur:
     includeAnnotations: true
     imageName: "opennode/waldur-prometheus-exporter"
     imageDigest: ""  # Optional: if set, uses unique docker image hash, priority over tag
+    # A ServiceMonitor for the Prometheus Operator, which ignores the
+    # prometheus.io annotations above. Needs the monitoring.coreos.com CRDs.
+    serviceMonitor:
+      enabled: false
+      # The exporter refreshes its values every 120 s, so scraping more often
+      # only reads the same values again.
+      interval: 60s
+      # Labels your Prometheus selects ServiceMonitors by; kube-prometheus-stack
+      # wants release: <its release name>.
+      labels: {}
   uvkEverypay:
     existingSecret:
       name:
@@ -904,48 +921,154 @@ rabbitmq:
     usernameKey: ""
     passwordKey: ""
 
-# Matrix chat integration (LiveKit media SFU + Matrix homeserver + lk-jwt).
+# Matrix chat integration (LiveKit media SFU + Matrix homeserver). Waldur
+# itself issues the LiveKit call tokens.
 matrixChat:
+  # Also turns on the project.show_matrix_chat feature flag, unless
+  # waldur.featureFlags sets it.
   enabled: false
-  # The only gate for the matrix-chat NetworkPolicies (livekit, lk-jwt,
-  # homeserver). Independent of the chart-wide `networkPolicy.enabled`, which
-  # gates only the homeport/mastermind-api policies. Set this to ship the
+  # The Matrix bot (mastermind's `matrix_bot` command): Waldur's encrypted member
+  # of every Waldur room. It answers chat commands and posts everything Waldur
+  # sends as the bot; while it runs, nothing else can. Exactly one replica: its
+  # lease in the database makes a second one refuse to start. Its crypto store
+  # lives in Waldur's database (schema `matrix_bot`), so it needs no volume.
+  bot:
+    enabled: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 300Mi
+      limits:
+        cpu: 500m
+        memory: 600Mi
+    podLabels: {}
+    podAnnotations: {}
+    extraEnvVars: []
+    extraEnvFrom: []
+    extraVolumes: []
+    extraVolumeMounts: []
+  # The only gate for the matrix-chat NetworkPolicies (livekit, homeserver).
+  # Independent of the chart-wide `networkPolicy.enabled`, which gates only
+  # the homeport/mastermind-api policies. Set this to ship the
   # matrix/livekit policies — the LiveKit media rule is what lets Element Call
   # media connect — without opting the rest of the stack into NetworkPolicy.
   networkPolicy:
     enabled: false
+  # Chat health alerts, as a Prometheus Operator PrometheusRule. They read the
+  # waldur_matrix_* metrics of waldur.metricsExporter, whose token must belong
+  # to a support or staff user. See docs/matrix-chat.md, "Monitoring".
+  prometheusRule:
+    enabled: false
+    # Labels your Prometheus selects rules by; kube-prometheus-stack wants
+    # release: <its release name>.
+    labels: {}
+  # Zero-touch setup. The appservice token is a shared secret between two
+  # programs — Waldur and the homeserver — so the deployment mints it once and
+  # hands the same value to both, the way a database password is handled. With
+  # this on, the Setup wizard is not part of installing Matrix chat: the
+  # operator is never asked for a homeserver URL, domain, or registration
+  # secret that the chart itself chose, and nothing is typed into two places.
+  setup:
+    enabled: true
+    # Secret the init Job generates (and reuses forever after). The Job creates
+    # it through the API, so Helm never owns it and `helm uninstall` leaves it
+    # (ArgoCD does not prune it either) — losing these tokens while the
+    # homeserver's data volume survives means losing the ability to talk to
+    # your own chat history.
+    secretName: matrix-appservice-secret
+    # Bot account localpart; becomes @<localpart>:<serverName>.
+    botLocalpart: waldur-bot
+    # Automate `!admin appservices register` instead of leaving it as a
+    # hand-typed admin-room command, with the mastermind image's
+    # `register_matrix_appservice`.
+    #
+    # On a new homeserver it creates a bootstrap admin, @waldur-bootstrap,
+    # through the shared-secret registration API, keyed by the registration
+    # token, with the bootstrap password from the Secret; later runs sign in as
+    # it with that password. It signs the bootstrap session out when done. No
+    # account becomes an admin by being the first one.
+    # Re-runs replace the homeserver's registration only when it differs from
+    # Waldur's, after a token rotation say, and otherwise change nothing.
+    #
+    # Off: the appservice has to be registered by hand, and every token
+    # rotation needs that again (docs/matrix-chat.md, "Rotating the tokens").
+    registerAppservice: true
+    # Seconds the wiring Job waits for the homeserver to answer before it
+    # registers the appservice. Tuwunel migrates its database silently on the
+    # first boot of a new version, and the StatefulSet may be restarting on the
+    # very upgrade that runs the Job. Under plain Helm the hook is also bounded
+    # by `helm upgrade --timeout` (5m by default); ArgoCD has no such limit.
+    homeserverWaitTimeout: 900
+    # Supply the tokens yourself (Vault, Sealed Secrets, ESO) instead of
+    # having the Job generate them. When set, nothing is generated and the
+    # referenced Secret is read as-is.
+    #
+    # registerAppservice needs admin rights on the homeserver to register or
+    # replace the registration. It uses a homeserver admin's access token from
+    # the optional admin token key when the Secret has one, and the bootstrap
+    # password otherwise, so include a bootstrap password. The chart never
+    # mints an admin token: add it for the sync that needs it and remove it
+    # afterwards, since a revoked one left there makes the next change fail.
+    existingSecret:
+      name: ""
+      asTokenKey: "as_token"
+      hsTokenKey: "hs_token"
+      registrationTokenKey: "registration_token"
+      bootstrapPasswordKey: "bootstrap_password"
+      adminTokenKey: "admin_token"
   livekit:
     # Deploy the bundled livekit-server SFU. Set to false to use an EXTERNAL,
-    # operator-managed LiveKit instead: keep lkJwt.enabled=true, point publicUrl
-    # at the external wss endpoint, and supply its API key/secret via
-    # keys.existingSecret.name (the chart only creates livekit-secret when this
-    # is true, so an external setup MUST use existingSecret).
+    # operator-managed LiveKit instead: point publicUrl at the external wss
+    # endpoint, and supply its API key/secret via keys.existingSecret.name (the
+    # chart only creates livekit-secret when this is true, so an external setup
+    # MUST use existingSecret).
+    #
+    # Waldur issues the call tokens: the homeserver's .well-known points
+    # Matrix clients at https://<apiHostname>/api/matrix/livekit, and Waldur
+    # gives a token only to joined members of the room. The chart seeds
+    # MATRIX_LIVEKIT_PUBLIC_URL, MATRIX_LIVEKIT_URL, MATRIX_LIVEKIT_KEY and
+    # MATRIX_LIVEKIT_SECRET from these values in the Matrix wiring Job (the
+    # init-whitelabeling job with setup off).
     enabled: false
     imageRegistry: docker.io
     imageName: livekit/livekit-server
     imageTag: "v1.13.7"
     imageDigest: ""
-    # Public wss signaling URL the browser dials (returned to clients by lk-jwt).
+    # Public wss signaling URL the browser dials (returned to clients with
+    # their call token). Calls are offered only when this is set.
     # Bundled LiveKit: reachable via the matrix ingress (e.g. wss://matrix.example.org).
     # External LiveKit: the external instance's own wss endpoint.
     # Either way, NOT an in-cluster name.
     publicUrl: ""           # e.g. wss://matrix.example.org
+    # Calls need encrypted transports: the chart refuses to render when
+    # publicUrl is not wss:// or apiScheme is not https, since both carry call
+    # credentials. Set true only for a local or kind cluster without TLS.
+    allowInsecureTransport: false
     resources: {}
     keys:
       apiKey: ""              # set this (chart creates a Secret from it) or use existingSecret
       apiSecret: ""           # set this or use existingSecret
       existingSecret:
         name: ""              # reference your own Secret instead (overrides the inline values)
-        apiKeyKey: "LIVEKIT_API_KEY"        # used by lk-jwt-service
-        apiSecretKey: "LIVEKIT_API_SECRET"  # used by lk-jwt-service
+        apiKeyKey: "LIVEKIT_API_KEY"        # seeded into Waldur, which signs call tokens
+        apiSecretKey: "LIVEKIT_API_SECRET"  # seeded into Waldur, which signs call tokens
         livekitKeysKey: "LIVEKIT_KEYS"      # used by livekit-server ("apikey: secret")
     rtc:
       signalingPort: 7880     # signaling (wss); ClusterIP behind the shared ingress
       udpPort: 7882           # WebRTC media, primary; LoadBalancer, never ingress
       tcpPort: 7881           # WebRTC media, fallback
-      # Set to the LiveKit node's public IP so it advertises a reachable address in
-      # ICE candidates; otherwise calls connect but carry no audio/video.
-      useExternalIp: true
+      # Read the livekit-rtc LoadBalancer's assigned external address at pod
+      # start and advertise it as node_ip. Replaces the post-install step of
+      # copying that address back into nodeIp by hand — and being re-resolved on
+      # every restart, it survives a reprovisioned LoadBalancer. A LoadBalancer
+      # that reports a hostname is resolved to its address. The pod waits for
+      # the address (up to 5 minutes per attempt, then retried by the kubelet)
+      # rather than falling back to STUN. Runs matrix-init from the mastermind
+      # image, so it needs an image that has it.
+      autoDiscoverNodeIp: true
+      # Fallback when autoDiscoverNodeIp is false: the LiveKit node's public IP,
+      # so it advertises a reachable address in ICE candidates; otherwise calls
+      # connect but carry no audio/video. Mutually exclusive with discovery.
       nodeIp: ""
       # Extra labels merged onto the livekit-rtc LoadBalancer Service. Empty by
       # default; some bare-metal LB controllers select the public vs internal IP
@@ -970,32 +1093,27 @@ matrixChat:
         existingSecret: ""
         certKey: "tls.crt"
         keyKey: "tls.key"
-  lkJwt:
-    # Element's LiveKit JWT service.
-    enabled: false
-    imageRegistry: ghcr.io
-    imageName: element-hq/lk-jwt-service
-    imageTag: "0.7.0"
-    # Set to pin immutably by digest; takes precedence over imageTag.
-    imageDigest: ""
-    # Accept a self-signed homeserver cert. Dev only. Prod uses a real cert.
-    insecureSkipVerifyTls: false
-    resources: {}
   homeserver:
     # Matrix homeserver. The backend integration was built and tested against Tuwunel.
     enabled: false
     imageRegistry: ghcr.io
     imageName: matrix-construct/tuwunel
-    imageTag: "v1.9.0"
+    imageTag: "v1.9.3"
     imageDigest: ""
     resources: {}
     # server_name is baked into every user/room ID (@user:<serverName>) and is
     # IMMUTABLE once the homeserver has data. Set it to your real domain.
     serverName: ""
     clientPort: 6167
+    # Must be false with sso.enabled: the chart refuses to render both, as a
+    # trusted SSO provider would sign a user in to an account someone else
+    # registered under their name. Waldur provisions through its appservice.
     allowRegistration: true
-    # Federation must stay on: lk-jwt-service verifies the user's Matrix OpenID
-    # token via the federation endpoint before issuing a LiveKit JWT.
+    # Calls do not need federation: Waldur verifies a caller's Matrix OpenID
+    # token at the homeserver's openid/userinfo endpoint on the in-cluster
+    # client port (MATRIX_HOMESERVER_URL), which Tuwunel serves with
+    # federation off too. Turning it off affects only federation with other
+    # homeservers.
     allowFederation: true
     maxRequestSize: 104857600
     # Lifetime in seconds of access tokens issued to clients that ask for a
@@ -1006,29 +1124,98 @@ matrixChat:
     # Idle lifetime in seconds of those refresh tokens; 0 means never expire.
     # Each refresh moves the deadline forward, so a drawer in use never expires;
     # a page left silent this long (e.g. on a suspended laptop) starts a new
-    # session through Waldur. When a user starts a session, Waldur also signs
-    # out that user's chat devices idle for more than 24 hours, so a longer
-    # value only keeps devices of users who start no other session.
+    # session through Waldur. Waldur also signs out its chat devices idle for
+    # more than 24 hours, when a user starts a session and in a daily job, so a
+    # longer value, or 0, does not keep an idle drawer alive much beyond a day.
     refreshTokenTtl: 86400
-    # Public lk-jwt base URL advertised to clients, e.g. https://<serverName>.
-    # Do NOT append /sfu — the client adds /get_token itself, so a trailing
-    # /sfu produces a 404 on /sfu/get_token and calls never connect.
-    # Required for calls. Leave empty until lk-jwt-service is deployed.
-    livekitServiceUrl: ""
-    # Registration token that gates user provisioning. MUST equal the backend's
-    # MATRIX_USER_REGISTRATION_SECRET.
+    # Registration token that gates account registration, and the registration
+    # shared secret admins are registered with. MUST equal the backend's
+    # MATRIX_USER_REGISTRATION_SECRET. Only for setup.enabled=false: with setup
+    # on, the token comes from the setup Secret and setting either of these is a
+    # render error.
     registrationToken: ""
     registrationTokenExistingSecret:
       name: ""
       key: "registration_token"
+    # Let Matrix clients sign in with a password. Set false for
+    # MATRIX_EXTERNAL_LOGIN_METHOD none or oidc: clients then have no password
+    # form. Waldur's chat drawer is unaffected; it signs in through the appservice.
+    # Admins cannot sign in with a password either, so re-registering the
+    # appservice after a token rotation then needs an admin's access token.
+    loginWithPassword: true
+    # Single sign-on for Matrix clients (MATRIX_EXTERNAL_LOGIN_METHOD=oidc):
+    # Element and others sign in through the same IdP as Waldur, into the account
+    # Waldur provisioned. Register a client at the IdP with the redirect URI
+    # https://<serverName>/_matrix/client/unstable/login/sso/callback/<clientId>.
+    # Needs apiScheme https: Tuwunel's SSO cookie is Secure.
+    sso:
+      enabled: false
+      # The IdP software, e.g. keycloak, gitlab or github; Tuwunel applies
+      # provider-specific workarounds by it.
+      brand: "keycloak"
+      # Label on the clients' sign-in button.
+      name: "Single sign-on"
+      # e.g. https://keycloak.example.org/realms/waldur
+      issuerUrl: ""
+      clientId: ""
+      # Set this (the chart creates a Secret) or use clientSecretExistingSecret.
+      # Either way the homeserver reads it from a file, never from the ConfigMap.
+      clientSecret: ""
+      clientSecretExistingSecret:
+        name: ""
+        key: "client_secret"
+      # Waldur's registration method of the users who sign in to Waldur through
+      # this same identity provider, i.e. that provider's name in Waldur (e.g.
+      # keycloak, eduteams). Waldur gives a Matrix account only to those users.
+      # With matrixChat.setup on, the wiring Job seeds it as
+      # MATRIX_SSO_REGISTRATION_METHOD, together with
+      # MATRIX_EXTERNAL_LOGIN_METHOD=oidc, and the chart refuses to render SSO
+      # without it. With setup off, set both in waldur.settingsOverrides.
+      waldurRegistrationMethod: ""
+      # Claims that become the Matrix localpart. Tuwunel reads only sub,
+      # preferred_username, username, nickname, email (its local part) and login
+      # (GitHub). Use the claim Waldur's identity provider uses as user_claim,
+      # with its user_field set to username and MATRIX_USER_ID_FORMAT=username,
+      # so both sides derive the same Matrix ID.
+      userIdClaims:
+        - sub
+      # The chart refuses email in userIdClaims unless this is true: Tuwunel
+      # uses only the local part of the address, so alice@a.org and
+      # alice@b.org would sign in to the same account. Set true only if the
+      # IdP issues addresses of a single domain.
+      allowEmailClaim: false
+      # Sign in to any existing account whose name matches the claim, not only
+      # the ones Waldur provisioned, so the claim must be one users cannot
+      # choose: keep sub unless the IdP controls usernames. With false, Tuwunel
+      # refuses every account it did not create through SSO, which is every
+      # account Waldur provisioned. Use true only for an IdP you control.
+      trusted: true
+      # Let SSO create accounts Waldur has not provisioned. With false, SSO only
+      # signs in to existing accounts; Waldur provisions one when a user opens
+      # its chat or is added to a project room. Together with trusted, the
+      # first SSO login of a name would create the account Waldur later
+      # provisions for that user, so the chart refuses that combination unless
+      # allowRegistrationWhenTrusted is also set.
+      registration: false
+      allowRegistrationWhenTrusted: false
+      # Further anchored patterns of usernames SSO never signs in to (Tuwunel's
+      # forbidden_usernames, which also refuses to register them, so create an
+      # admin before you list it). A trusted provider signs a user in to any
+      # existing account named like their claim, so list every homeserver admin
+      # here. The chart always reserves the appservice bot's localpart
+      # (setup.botLocalpart, or with setup off MATRIX_APPSERVICE_SENDER_LOCALPART
+      # from waldur.settingsOverrides where that is set) and waldur-bootstrap,
+      # the bootstrap admin that automatic registration creates, ahead of this
+      # list. A bot localpart changed in Waldur's settings rather than here has
+      # to be listed too.
+      forbiddenUsernames: []
     persistence:
       enabled: true
       size: 10Gi
       storageClass: ""
       # Empty: the StatefulSet provisions its own PVC (data-matrix-homeserver-0)
       # from the volumeClaimTemplate. Set it to mount a pre-existing claim
-      # instead — e.g. to adopt the `matrix-homeserver-data` PVC from a prior
-      # Deployment-based release without losing the embedded database.
+      # instead.
       existingClaim: ""
 
 global:

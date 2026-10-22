@@ -634,8 +634,8 @@ Whether the traefik matrix-chain middleware has any member.
 
 Unlike every other chain in the chart, matrix-chain's members are *all*
 optional — the https redirect and the IP allow list, nothing else (the
-homeserver, lk-jwt and LiveKit emit their own CORS headers, so no header
-middleware is attached). Once the redirect became conditional, a plain-http
+homeserver and LiveKit emit their own CORS headers, so no header middleware is
+attached). Once the redirect became conditional, a plain-http
 deployment with no whitelistSourceRange would render `middlewares:` with an
 empty list, which Traefik rejects. So the chain object and the ingress
 annotation that references it are both gated on this.
@@ -646,4 +646,188 @@ true
 {{- else -}}
 false
 {{- end -}}
+{{- end -}}
+
+{{/*
+Exec command for the Celery worker's startup, liveness and readiness probes:
+ping this pod's own worker (celery@<hostname>, the node name Celery derives
+from socket.gethostname()) and exit non-zero, with the reason on stderr, if it
+does not reply within 10s (Celery's default 1s RPC timeout is too low under
+load).
+
+This replaces `celery inspect -d celery@$HOSTNAME ping`, which never closes
+its broker connections: the ping is published through Celery's pooled
+producer, and the CLI exits with that pooled socket -- and its own -- still
+open. RabbitMQ logs each one as "client unexpectedly closed TCP connection",
+several times a minute per worker replica. Detaching the producer pool makes
+the ping publish on the probe's own connection, which the `with` block closes
+with a proper AMQP connection.close. (Closing the pools instead does not help:
+kombu tears pooled sockets down without the AMQP close.) `producer_pool` is a
+cached_property, so it is assigned directly: that holds even if the pool was
+read earlier, whereas setting the private `_producer_pool` would not.
+*/}}
+{{- define "waldur.workerPingProbeCommand" -}}
+- python3
+- -c
+- |
+  import socket, sys
+  from waldur_core.server.celeryconf import app
+  app.control.mailbox.producer_pool = None
+  worker = "celery@" + socket.gethostname()
+  with app.connection() as conn:
+      conn.ensure_connection(max_retries=1)
+      replies = app.control.ping(destination=[worker], timeout=10, connection=conn)
+  if not replies:
+      sys.exit(worker + " did not reply to ping within 10s")
+{{- end -}}
+
+{{/*
+Whether Matrix calls are configured: chat is on and LiveKit has a public
+signaling URL (bundled or external). Gates the homeserver's RTC focus and the
+LiveKit settings seeded into Waldur. Returns "true" or "false".
+
+Calls carry bearer credentials in both directions: clients post their Matrix
+OpenID token to Waldur's call token API (<apiScheme>://<apiHostname>), and get
+back a LiveKit token they present on the signalling websocket (publicUrl). So
+when calls are configured the render fails unless both transports are
+encrypted — apiScheme "https" and a wss:// publicUrl — or
+matrixChat.livekit.allowInsecureTransport opts out for a local or kind cluster.
+*/}}
+{{- define "waldur.matrixCallsEnabled" -}}
+{{- if and .Values.matrixChat.enabled .Values.matrixChat.livekit.publicUrl -}}
+{{- if not .Values.matrixChat.livekit.allowInsecureTransport -}}
+{{- if not (hasPrefix "wss://" .Values.matrixChat.livekit.publicUrl) -}}
+{{- fail (printf "matrixChat.livekit.publicUrl must be a wss:// URL, got %q: clients send their LiveKit call token on it. Set matrixChat.livekit.allowInsecureTransport=true to allow plaintext on a local or test cluster." .Values.matrixChat.livekit.publicUrl) -}}
+{{- end -}}
+{{- if ne .Values.apiScheme "https" -}}
+{{- fail (printf "Matrix calls need apiScheme \"https\", got %q: clients post their Matrix OpenID token to the call token API at <apiScheme>://<apiHostname>/api/matrix/livekit. Set matrixChat.livekit.allowInsecureTransport=true to allow plaintext on a local or test cluster." .Values.apiScheme) -}}
+{{- end -}}
+{{- end -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
+The call token API that Matrix clients use, served by Waldur's API. The
+homeserver advertises it as the `livekit_service_url` of its RTC focus in
+`.well-known/matrix/client`; Element Call and Waldur's chat drawer post to
+<this>/get_token (and the legacy <this>/sfu/get) to get a LiveKit token.
+*/}}
+{{- define "waldur.matrixLivekitServiceUrl" -}}
+{{- printf "%s://%s/api/matrix/livekit" .Values.apiScheme .Values.apiHostname -}}
+{{- end -}}
+
+{{/*
+The LiveKit URL Waldur's backend calls (Twirp room API): the bundled server's
+in-cluster Service, or the external server's public URL as http(s). Dotted,
+because Waldur's URL settings reject single-label hostnames.
+*/}}
+{{- define "waldur.matrixLivekitInternalUrl" -}}
+{{- $lk := .Values.matrixChat.livekit -}}
+{{- if $lk.enabled -}}
+{{- printf "http://livekit-signaling.%s.svc:%v" .Release.Namespace $lk.rtc.signalingPort -}}
+{{- else -}}
+{{- $lk.publicUrl | replace "wss://" "https://" | replace "ws://" "http://" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The Matrix origins the homeport CSP allows in connect-src: the homeserver over
+https (chat sync, media) and wss (the bundled LiveKit's /rtc signalling route
+sits behind it), plus the LiveKit publicUrl's origin when it is not the
+homeserver's -- an operator-managed SFU, or a bundled one whose RTC
+LoadBalancer has its own DNS name. The browser dials publicUrl straight from
+the SPA, so an origin missing here refuses the call websocket client-side with
+no server-side trace. Empty when matrix chat is off. Shared by the nginx,
+haproxy, traefik and HTTPRoute policies, which are otherwise copies of each
+other.
+*/}}
+{{- define "waldur.matrixConnectSrc" -}}
+{{- if and .Values.matrixChat.enabled .Values.matrixChat.homeserver.enabled .Values.matrixChat.homeserver.serverName -}}
+{{- $serverName := .Values.matrixChat.homeserver.serverName -}}
+{{- $origins := list (printf "%s://%s" .Values.apiScheme $serverName) (printf "wss://%s" $serverName) -}}
+{{- with .Values.matrixChat.livekit.publicUrl -}}
+{{- $url := urlParse . -}}
+{{- $origin := printf "%s://%s" $url.scheme $url.host -}}
+{{- if not (has $origin $origins) -}}
+{{- $origins = append $origins $origin -}}
+{{- end -}}
+{{- end -}}
+{{- join " " $origins -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The appservice bot's Matrix localpart: MATRIX_APPSERVICE_SENDER_LOCALPART from
+waldur.settingsOverrides, else matrixChat.setup.botLocalpart where the chart
+has one, else Waldur's default. A value changed only in Waldur's settings is
+invisible here.
+*/}}
+{{- define "waldur.matrixBotLocalpart" -}}
+{{- index .Values.waldur.settingsOverrides "MATRIX_APPSERVICE_SENDER_LOCALPART" | default (dig "setup" "botLocalpart" "waldur-bot" .Values.matrixChat) -}}
+{{- end -}}
+
+{{/*
+Init container that blocks the main process until the schema matches this image.
+
+Migrations run only in the beat Deployment (waldur-mastermind-migrate, args:
+initdb). Helm and Argo CD update the API, worker, and web-shell Deployments
+in the same sync, so without this gate the new image can answer requests,
+consume Celery tasks, or open a shell while those migrations are still
+running. The pod stays unready until this container exits 0.
+
+`migrate --check` exits non-zero while any migration known to this image is
+unapplied, and also while the database is unreachable. It does not apply
+migrations, so beat remains the only migrator. The first check runs before
+any sleep: a restart against an already-current schema pays for one Django
+boot and continues.
+
+Context is a dict:
+  root:      chart root context (image, credentials, initdbWaitTimeout)
+  resources: requests/limits for this pod's main container
+*/}}
+{{- define "waldur.waitForMigrationsInitContainer" -}}
+- name: wait-for-migrations
+  {{- if .root.Values.waldur.imageDigest }}
+  image: {{ .root.Values.global.imageRegistry }}/{{ .root.Values.waldur.imageName }}@{{ .root.Values.waldur.imageDigest }}
+  {{- else }}
+  image: {{ .root.Values.global.imageRegistry }}/{{ .root.Values.waldur.imageName }}:{{ .root.Values.waldur.imageTag }}
+  {{- end }}
+  imagePullPolicy: {{ include "waldur.imagePullPolicy" (dict "tag" .root.Values.waldur.imageTag "Values" .root.Values) }}
+  command:
+    - /bin/bash
+    - -ec
+    - |
+      DEADLINE=$(( $(date +%s) + {{ .root.Values.waldur.initdbWaitTimeout | default 2700 | int }} ))
+      until waldur migrate --check >/dev/null 2>&1; do
+          if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "ERROR: migrations still incomplete after {{ .root.Values.waldur.initdbWaitTimeout | default 2700 | int }}s." >&2
+              echo "ERROR: the beat pod runs them in its waldur-mastermind-migrate initContainer -- check it." >&2
+              # Surface the reason rather than just the timeout.
+              waldur migrate --check || true
+              exit 1
+          fi
+          echo "INFO: waiting for migrations to complete..."
+          # 30s, not a tighter loop: `migrate --check` boots the whole
+          # Django app registry every time (~4s measured), on the node
+          # that is busy running the migrations. Each API, worker, and
+          # web-shell replica polls on its own, so a 10s interval
+          # multiplies that cost by the replica count. One hook polling
+          # every 10s spent ~234s of CPU across 60 boots during one 834s
+          # wait; 30s cuts that, and the first check runs before any
+          # sleep, so an upgrade against an already-current schema --
+          # the common case -- still proceeds immediately.
+          sleep 30
+      done
+      echo "INFO: schema is up to date."
+  env:
+    {{- include "waldur.credentials" .root | nindent 4 }}
+  volumeMounts:
+    - name: api-override
+      mountPath: /etc/waldur/override.conf.py
+      subPath: override.conf.py
+  resources:
+    {{- toYaml .resources | nindent 4 }}
 {{- end -}}
